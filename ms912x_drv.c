@@ -342,6 +342,9 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	ms912x = devm_drm_dev_alloc(&interface->dev, &driver,
 				    struct ms912x_device, drm);
+	if (IS_ERR(ms912x))
+		return PTR_ERR(ms912x);
+
 	ms912x->intf = interface;
 	dev = &ms912x->drm;
 
@@ -353,6 +356,8 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 			 "buffer sharing not supported"); /* not an error */
 
 	ret = drmm_mode_config_init(dev);
+	if (ret)
+		goto err_put_device;
 
 	/* No idea */
 	dev->mode_config.min_width = 0;
@@ -362,12 +367,16 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	dev->mode_config.funcs = &ms912x_mode_config_funcs;
 
 	ret = ms912x_connector_init(ms912x);
+	if (ret)
+		goto err_put_device;
 
 	ret = drm_simple_display_pipe_init(&ms912x->drm, &ms912x->display_pipe,
 					   &ms912x_pipe_funcs,
 					   ms912x_pipe_formats,
 					   ARRAY_SIZE(ms912x_pipe_formats),
 					   NULL, &ms912x->connector);
+	if (ret)
+		goto err_put_device;
 
 	drm_plane_enable_fb_damage_clips(&ms912x->display_pipe.plane);
 
@@ -378,10 +387,16 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	drm_kms_helper_poll_init(dev);
 
 	ret = drm_dev_register(dev, 0);
+	if (ret)
+		goto err_put_device;
 
 	drm_fbdev_generic_setup(dev, 0);
 
 	return 0;
+
+err_put_device:
+	put_device(ms912x->dmadev);
+	return ret;
 }
 
 static void ms912x_usb_disconnect(struct usb_interface *interface)
@@ -397,18 +412,7 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 }
 
 static const struct usb_device_id id_table[] = {
-	{
-		.idVendor = 0x534d,
-		.idProduct = 0x6021,
-		.bInterfaceClass = 0xff,
-		.bInterfaceSubClass = 0x00,
-		.bInterfaceProtocol = 0x00,
-		.match_flags = USB_DEVICE_ID_MATCH_VENDOR |
-			       USB_DEVICE_ID_MATCH_PRODUCT |
-			       USB_DEVICE_ID_MATCH_INT_CLASS |
-			       USB_DEVICE_ID_MATCH_INT_SUBCLASS |
-			       USB_DEVICE_ID_MATCH_INT_PROTOCOL,
-	},
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x534d, 0x6021, 0xff, 0x00, 0x00) },
 	{},
 };
 MODULE_DEVICE_TABLE(usb, id_table);
