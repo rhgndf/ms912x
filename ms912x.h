@@ -27,6 +27,20 @@ struct ms912x_device {
 	struct drm_connector connector;
 	struct drm_simple_display_pipe display_pipe;
 	struct completion transfer_done;
+
+	void *transfer_buffer;
+	int num_urbs;
+	struct list_head urb_available_list;
+	spinlock_t urb_available_list_lock;
+	struct semaphore urb_available_list_sem;
+};
+
+struct ms912x_urb {
+	struct list_head entry;
+	struct ms912x_device *parent;
+	struct urb *urb;
+	bool is_temp;
+	bool is_last;
 };
 
 struct ms912x_request {
@@ -90,6 +104,15 @@ int ms912x_read_byte(struct ms912x_device *ms912x, u16 address);
 int ms912x_connector_init(struct ms912x_device* ms912x);
 int ms912x_set_resolution(struct ms912x_device *ms912x, const struct ms912x_mode* mode);
 
+void ms912x_free_urb(struct ms912x_device *ms912x);
+int ms912x_init_urb(struct ms912x_device *ms912x, size_t total_size);
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
+
+void ms912x_fb_send_rect(struct drm_framebuffer *fb,
+				 const struct dma_buf_map *map,
+				 struct drm_rect *rect);
+
+void ms912x_free_urb(struct ms912x_device *ms912x);
+int ms912x_init_urb(struct ms912x_device *ms912x, size_t total_size);
 #endif
