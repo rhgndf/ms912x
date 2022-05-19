@@ -1,6 +1,6 @@
-# ms912x driver
+# ms912x driver for Linux
 
-Driver for MacroSilicon USB to VGA/HDMI adapter. VID/PID is 534d:6021.
+Linux kernel driver for MacroSilicon USB to VGA/HDMI adapter. VID/PID is 534d:6021. Device is USB2.0
 
 TODOs:
 
