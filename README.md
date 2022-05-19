@@ -4,7 +4,7 @@ Driver for MacroSilicon USB to VGA/HDMI adapter. VID/PID is 534d:6021.
 
 TODOs:
 
-- Better RGB to YUV conversion (or just request for a YUV422 plane)
-- VGA
+- Detect connector type (VGA, HDMI, etc...)
 - More resolutions
 - Error handling
+- Is RGB to YUV conversion needed?

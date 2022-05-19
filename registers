@@ -1,5 +1,5 @@
 0x2d = ???
 0x31 = probably video port type
-0x32 = video status (1=plugin)
+0x32 = video status (1=plugged in)
 0x30 = ???
 0xc0xx = edid 
