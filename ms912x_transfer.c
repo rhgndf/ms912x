@@ -157,7 +157,7 @@ static const unsigned char ms912x_end_of_buffer[8] = { 0xff, 0xc0, 0x00, 0x00,
 						       0x00, 0x00, 0x00, 0x00 };
                             
 void ms912x_fb_send_rect(struct drm_framebuffer *fb,
-				 const struct dma_buf_map *map,
+				 const struct iosys_map *map,
 				 struct drm_rect *rect)
 {
 	int ret, i;

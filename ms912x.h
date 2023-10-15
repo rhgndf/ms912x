@@ -110,7 +110,7 @@ int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
 
 void ms912x_fb_send_rect(struct drm_framebuffer *fb,
-				 const struct dma_buf_map *map,
+				 const struct iosys_map *map,
 				 struct drm_rect *rect);
 
 void ms912x_free_urb(struct ms912x_device *ms912x);
