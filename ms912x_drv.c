@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (C) 2012 Red Hat
- */
 
 #include <linux/module.h>
 
@@ -135,8 +132,15 @@ static void ms912x_pipe_enable(struct drm_simple_display_pipe *pipe,
 
 	ms912x_power_on(ms912x);
 
-	if (crtc_state->mode_changed)
+	if (crtc_state->mode_changed) {
+		// Reset the update rect when the mode changes.
+		ms912x->update_rect.x1 = 0;
+		ms912x->update_rect.y1 = 0;
+		ms912x->update_rect.x2 = mode->hdisplay;
+		ms912x->update_rect.y2 = mode->vdisplay;
+		
 		ms912x_set_resolution(ms912x, ms912x_get_mode(mode));
+	}
 }
 
 static void ms912x_pipe_disable(struct drm_simple_display_pipe *pipe)
@@ -164,17 +168,30 @@ int ms912x_pipe_check(struct drm_simple_display_pipe *pipe,
 	return 0;
 }
 
+static void ms912x_merge_rects(struct drm_rect* dest, struct drm_rect* r1, struct drm_rect* r2) {
+	dest->x1 = min(r1->x1, r2->x1);
+	dest->y1 = min(r1->y1, r2->y1);
+	dest->x2 = max(r1->x2, r2->x2);
+	dest->y2 = max(r1->y2, r2->y2);
+}
+
 static void ms912x_pipe_update(struct drm_simple_display_pipe *pipe,
 			       struct drm_plane_state *old_state)
 {
 	struct drm_plane_state *state = pipe->plane.state;
 	struct drm_shadow_plane_state *shadow_plane_state =
 		to_drm_shadow_plane_state(state);
-	struct drm_rect rect;
+	struct ms912x_device *ms912x = to_ms912x(state->fb->dev);
+	struct drm_rect current_rect, rect;
 
-	if (drm_atomic_helper_damage_merged(old_state, state, &rect))
+	if (drm_atomic_helper_damage_merged(old_state, state, &current_rect)) {
+		// The device double buffers, so we need to send the update
+		// rects of the last two frames.
+		ms912x_merge_rects(&rect, &current_rect, &ms912x->update_rect);
 		ms912x_fb_send_rect(state->fb, &shadow_plane_state->data[0],
 				     &rect);
+		ms912x->update_rect = current_rect;
+	}
 }
 
 static const struct drm_simple_display_pipe_funcs ms912x_pipe_funcs = {
@@ -222,6 +239,11 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	dev->mode_config.min_height = 0;
 	dev->mode_config.max_height = 10000;
 	dev->mode_config.funcs = &ms912x_mode_config_funcs;
+
+	ms912x->update_rect.x1 = 0;
+	ms912x->update_rect.y1 = 0;
+	ms912x->update_rect.x2 = 0;
+	ms912x->update_rect.y2 = 0;
 
 	ms912x_init_urb(ms912x, 100 * MS912X_MAX_TRANSFER_LENGTH);
 

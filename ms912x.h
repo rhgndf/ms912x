@@ -28,6 +28,7 @@ struct ms912x_device {
 	struct drm_simple_display_pipe display_pipe;
 	struct completion transfer_done;
 
+	struct drm_rect update_rect;
 	void *transfer_buffer;
 	int num_urbs;
 	struct list_head urb_available_list;

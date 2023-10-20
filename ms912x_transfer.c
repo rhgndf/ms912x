@@ -192,7 +192,7 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	header.height = cpu_to_be16(drm_rect_height(rect));
 
 	transfer_buffer =
-		vmalloc(drm_rect_width(rect) * drm_rect_height(rect) * 2 + 16);
+		vmalloc(width * drm_rect_height(rect) * 2 + 16);
 	if (!transfer_buffer)
 		goto dev_exit;
 
