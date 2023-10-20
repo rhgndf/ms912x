@@ -133,12 +133,6 @@ static void ms912x_pipe_enable(struct drm_simple_display_pipe *pipe,
 	ms912x_power_on(ms912x);
 
 	if (crtc_state->mode_changed) {
-		// Reset the update rect when the mode changes.
-		ms912x->update_rect.x1 = 0;
-		ms912x->update_rect.y1 = 0;
-		ms912x->update_rect.x2 = mode->hdisplay;
-		ms912x->update_rect.y2 = mode->vdisplay;
-		
 		ms912x_set_resolution(ms912x, ms912x_get_mode(mode));
 	}
 }
@@ -181,12 +175,13 @@ static void ms912x_pipe_update(struct drm_simple_display_pipe *pipe,
 	struct drm_plane_state *state = pipe->plane.state;
 	struct drm_shadow_plane_state *shadow_plane_state =
 		to_drm_shadow_plane_state(state);
-	struct ms912x_device *ms912x = to_ms912x(state->fb->dev);
+	struct ms912x_device *ms912x;
 	struct drm_rect current_rect, rect;
 
 	if (drm_atomic_helper_damage_merged(old_state, state, &current_rect)) {
 		// The device double buffers, so we need to send the update
 		// rects of the last two frames.
+		ms912x = to_ms912x(state->fb->dev);
 		ms912x_merge_rects(&rect, &current_rect, &ms912x->update_rect);
 		ms912x_fb_send_rect(state->fb, &shadow_plane_state->data[0],
 				     &rect);

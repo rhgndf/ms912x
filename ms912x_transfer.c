@@ -175,9 +175,11 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	int transfer_blocks, transfer_length;
 	/* Hardware can only update framebuffer in multiples of 16 horizontally */
 	int x = ALIGN_DOWN(rect->x1, 16);
-	int width = ALIGN(rect->x2, 16) - x;
+	/* Resolutions that are not a multiple of 16 like 1366*768 need to align */
+	int width =
+		min(ALIGN(rect->x2, 16), ALIGN_DOWN((int)fb->width, 16)) - x;
 	int y1 = rect->y1;
-	int y2 = rect->y2;
+	int y2 = min(rect->y2, (int)fb->height);
 	int idx;
 
 	drm_dev_enter(drm, &idx);
@@ -191,8 +193,7 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	header.width = width / 16;
 	header.height = cpu_to_be16(drm_rect_height(rect));
 
-	transfer_buffer =
-		vmalloc(width * drm_rect_height(rect) * 2 + 16);
+	transfer_buffer = vmalloc(width * drm_rect_height(rect) * 2 + 16);
 	if (!transfer_buffer)
 		goto dev_exit;
 
