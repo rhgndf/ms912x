@@ -41,7 +41,7 @@ static enum drm_connector_status ms912x_detect(struct drm_connector *connector,
 		return connector_status_unknown;
 
 	return status == 1 ? connector_status_connected :
-				   connector_status_disconnected;
+			     connector_status_disconnected;
 }
 static const struct drm_connector_helper_funcs ms912x_connector_helper_funcs = {
 	.get_modes = ms912x_connector_get_modes,
@@ -64,8 +64,7 @@ int ms912x_connector_init(struct ms912x_device *ms912x)
 	ret = drm_connector_init(&ms912x->drm, &ms912x->connector,
 				 &ms912x_connector_funcs,
 				 DRM_MODE_CONNECTOR_HDMIA);
-	ms912x->connector.polled = DRM_CONNECTOR_POLL_HPD |
-				   DRM_CONNECTOR_POLL_CONNECT |
-				   DRM_CONNECTOR_POLL_DISCONNECT;
+	ms912x->connector.polled =
+		DRM_CONNECTOR_POLL_CONNECT | DRM_CONNECTOR_POLL_DISCONNECT;
 	return ret;
 }
