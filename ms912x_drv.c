@@ -205,7 +205,7 @@ static const uint32_t ms912x_pipe_formats[] = {
 static int ms912x_usb_probe(struct usb_interface *interface,
 			    const struct usb_device_id *id)
 {
-	int ret;
+	int ret, i;
 	struct ms912x_device *ms912x;
 	struct drm_device *dev;
 
@@ -216,8 +216,6 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	ms912x->intf = interface;
 	dev = &ms912x->drm;
-
-	init_completion(&ms912x->transfer_done);
 
 	ms912x->dmadev = usb_intf_get_dma_device(interface);
 	if (!ms912x->dmadev)
@@ -239,6 +237,11 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ms912x->update_rect.y1 = 0;
 	ms912x->update_rect.x2 = 0;
 	ms912x->update_rect.y2 = 0;
+
+	// Some dongles need a few reads to be initialized
+	for (i = 0; i < 128; i++) {
+		ms912x_read_byte(ms912x, i);
+	}
 
 	ms912x_init_urb(ms912x, 100 * MS912X_MAX_TRANSFER_LENGTH);
 

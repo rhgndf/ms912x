@@ -26,7 +26,6 @@ struct ms912x_device {
 
 	struct drm_connector connector;
 	struct drm_simple_display_pipe display_pipe;
-	struct completion transfer_done;
 
 	struct drm_rect update_rect;
 	void *transfer_buffer;
