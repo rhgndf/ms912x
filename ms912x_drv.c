@@ -162,7 +162,9 @@ int ms912x_pipe_check(struct drm_simple_display_pipe *pipe,
 	return 0;
 }
 
-static void ms912x_merge_rects(struct drm_rect* dest, struct drm_rect* r1, struct drm_rect* r2) {
+static void ms912x_merge_rects(struct drm_rect *dest, struct drm_rect *r1,
+			       struct drm_rect *r2)
+{
 	dest->x1 = min(r1->x1, r2->x1);
 	dest->y1 = min(r1->y1, r2->y1);
 	dest->x2 = max(r1->x2, r2->x2);
@@ -205,7 +207,8 @@ static const uint32_t ms912x_pipe_formats[] = {
 static int ms912x_usb_probe(struct usb_interface *interface,
 			    const struct usb_device_id *id)
 {
-	int ret, i;
+	int ret;
+	unsigned int i;
 	struct ms912x_device *ms912x;
 	struct drm_device *dev;
 
@@ -243,7 +246,10 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		ms912x_read_byte(ms912x, i);
 	}
 
-	ms912x_init_urb(ms912x, 100 * MS912X_MAX_TRANSFER_LENGTH);
+	// Enough to send a full frame of 1920x1080
+	ms912x_init_urb(ms912x, 64);
+	
+	init_completion(&ms912x->urb_completion);
 
 	ret = ms912x_connector_init(ms912x);
 	if (ret)
