@@ -126,15 +126,16 @@ static inline unsigned int ms912x_rgb_to_v(unsigned int r, unsigned int g,
 }
 
 static int ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer, u32 *xrgb_buffer,
-				      size_t len)
+				      size_t len, u32* temp_buffer)
 {
 	unsigned int i, offset = 0;
 	unsigned int pixel1, pixel2;
 	unsigned int r1, g1, b1, r2, g2, b2;
 	unsigned int v, y1, u, y2;
+	memcpy(temp_buffer, xrgb_buffer, len * sizeof(u32));
 	for (i = 0; i < len; i += 2) {
-		pixel1 = xrgb_buffer[i];
-		pixel2 = xrgb_buffer[i + 1];
+		pixel1 = temp_buffer[i];
+		pixel2 = temp_buffer[i + 1];
 
 		r1 = (pixel1 >> 16) & 0xFF;
 		g1 = (pixel1 >> 8) & 0xFF;
@@ -184,6 +185,7 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	int y1 = rect->y1;
 	int y2 = min(rect->y2, (int)fb->height);
 	int idx;
+	u32* temp_buffer;
 
 	drm_dev_enter(drm, &idx);
 
@@ -207,13 +209,15 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	memcpy(transfer_buffer, &header, 8);
 	total_length += 8;
 
+	temp_buffer = vmalloc(width * sizeof(u32));
 	for (i = y1; i < y2; i++) {
 		const int line_offset = fb->pitches[0] * i;
 		const int byte_offset = line_offset + (x * 4);
 		ms912x_xrgb_to_yuv422_line(transfer_buffer + total_length,
-					   vaddr + byte_offset, width);
+					   vaddr + byte_offset, width, temp_buffer);
 		total_length += width * 2;
 	}
+	vfree(temp_buffer);
 
 	memcpy(transfer_buffer + total_length, ms912x_end_of_buffer, 8);
 	total_length += 8;
