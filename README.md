@@ -10,3 +10,8 @@ TODOs:
 - More resolutions
 - Error handling
 - Is RGB to YUV conversion needed?
+
+## DKMS
+
+Run `sudo dkms install .`
+
