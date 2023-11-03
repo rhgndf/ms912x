@@ -11,6 +11,10 @@ TODOs:
 - Error handling
 - Is RGB to YUV conversion needed?
 
+## Development 
+
+Driver is written by analyzing wireshark captures of the device.
+
 ## DKMS
 
 Run `sudo dkms install .`
