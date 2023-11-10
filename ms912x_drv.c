@@ -7,9 +7,7 @@
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fb_helper.h>
-#include <drm/drm_fbdev_generic.h>
 #include <drm/drm_file.h>
-#include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_managed.h>
@@ -44,7 +42,7 @@ static struct drm_gem_object *
 ms912x_driver_gem_prime_import(struct drm_device *dev, struct dma_buf *dma_buf)
 {
 	struct ms912x_device *ms912x = to_ms912x(dev);
-
+	// Crash?
 	if (!ms912x->dmadev)
 		return ERR_PTR(-ENODEV);
 
@@ -53,13 +51,8 @@ ms912x_driver_gem_prime_import(struct drm_device *dev, struct dma_buf *dma_buf)
 
 DEFINE_DRM_GEM_FOPS(ms912x_driver_fops);
 
-static const struct drm_driver driver = {
+static struct drm_driver driver = {
 	.driver_features = DRIVER_ATOMIC | DRIVER_GEM | DRIVER_MODESET,
-
-	/* GEM hooks */
-	.fops = &ms912x_driver_fops,
-	DRM_GEM_SHMEM_DRIVER_OPS,
-	.gem_prime_import = ms912x_driver_gem_prime_import,
 
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
@@ -67,6 +60,11 @@ static const struct drm_driver driver = {
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
+
+	/* GEM hooks */
+	.fops = &ms912x_driver_fops,
+	DRM_GEM_SHMEM_DRIVER_OPS,
+	.gem_prime_import = ms912x_driver_gem_prime_import,
 };
 
 static const struct drm_mode_config_funcs ms912x_mode_config_funcs = {
@@ -172,8 +170,6 @@ static void ms912x_pipe_update(struct drm_simple_display_pipe *pipe,
 			       struct drm_plane_state *old_state)
 {
 	struct drm_plane_state *state = pipe->plane.state;
-	struct drm_shadow_plane_state *shadow_plane_state =
-		to_drm_shadow_plane_state(state);
 	struct ms912x_device *ms912x;
 	struct drm_rect current_rect, rect;
 
@@ -187,7 +183,7 @@ static void ms912x_pipe_update(struct drm_simple_display_pipe *pipe,
 					&rect)) {
 			/* In case of error, merge the rects to update later */
 			ms912x_merge_rects(&ms912x->update_rect,
-					   &ms912x->update_rect, &rect);
+					   &ms912x->update_rec	t, &rect);
 		} else {
 			ms912x->update_rect = current_rect;
 		}
@@ -200,7 +196,6 @@ static const struct drm_simple_display_pipe_funcs ms912x_pipe_funcs = {
 	.check = ms912x_pipe_check,
 	.mode_valid = ms912x_pipe_mode_valid,
 	.update = ms912x_pipe_update,
-	DRM_GEM_SIMPLE_DISPLAY_PIPE_SHADOW_PLANE_FUNCS,
 };
 
 static const uint32_t ms912x_pipe_formats[] = {
@@ -222,7 +217,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ms912x->intf = interface;
 	dev = &ms912x->drm;
 
-	ms912x->dmadev = usb_intf_get_dma_device(interface);
+	ms912x->dmadev = usb_intf_get_dma_device(to_usb_interface(dev->dev));
 	if (!ms912x->dmadev)
 		drm_warn(dev,
 			 "buffer sharing not supported"); /* not an error */

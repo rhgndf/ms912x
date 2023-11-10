@@ -3,6 +3,7 @@
 
 #include <drm/drm_drv.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_gem_shmem_helper.h>
 
 #include "ms912x.h"
 
@@ -204,15 +205,29 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 
 	drm_dev_enter(drm, &idx);
 
-	ret = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
-	if (ret < 0)
+	vaddr = drm_gem_shmem_vmap(fb->obj[0]);
+	if (!vaddr)
 		goto dev_exit;
+	
+	if (fb->obj[0]->import_attach) {
+		ret = dma_buf_begin_cpu_access(
+			fb->obj[0]->import_attach->dmabuf, DMA_FROM_DEVICE);
+		if (ret) {
+			drm_err(drm, "dma_buf_begin_cpu_access err: %d\n", ret);
+			goto vunmap;
+		}
+	}
 
 	ret = ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer,
 					   map, fb, rect);
 	
-	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
-	if (ret < 0)
+	if (fb->obj[0]->import_attach)
+		dma_buf_end_cpu_access(
+			fb->obj[0]->import_attach->dmabuf, DMA_FROM_DEVICE);
+	
+vunmap:
+	drm_gem_shmem_vunmap(fb->obj[0], vaddr);
+	if (ret)
 		goto dev_exit;
 
 	/* Sending frames too fast, drop it */
@@ -226,6 +241,7 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	current_request->transfer_len = width * 2 * drm_rect_height(rect) + 16;
 	queue_work(system_long_wq, &current_request->work);
 	ms912x->current_request = 1 - ms912x->current_request;
+	
 dev_exit:
 	drm_dev_exit(idx);
 	return ret;
