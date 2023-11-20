@@ -14,7 +14,7 @@ void ms912x_free_urb(struct ms912x_device *ms912x)
 
 	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
 		urb_entry = &ms912x->urbs[i];
-		wait_for_completion(&urb_entry->done);
+		usb_kill_urb(urb_entry->urb);
 		if (urb_entry->urb->transfer_buffer)
 			usb_free_coherent(usb_dev, MS912X_MAX_TRANSFER_LENGTH,
 					  urb_entry->urb->transfer_buffer,
