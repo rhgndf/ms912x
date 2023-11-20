@@ -39,6 +39,13 @@ int ms912x_init_urb(struct ms912x_device *ms912x)
 	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
 
 	ms912x->current_urb = 0;
+
+	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
+		urb_entry = &ms912x->urbs[i];
+		init_completion(&urb_entry->done);
+		complete(&urb_entry->done);
+	}
+
 	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
 		urb_entry = &ms912x->urbs[i];
 
@@ -58,9 +65,6 @@ int ms912x_init_urb(struct ms912x_device *ms912x)
 			return -ENOMEM;
 		}
 
-		init_completion(&urb_entry->done);
-		complete(&urb_entry->done);
-
 		usb_fill_bulk_urb(urb, usb_dev, usb_sndbulkpipe(usb_dev, 4),
 				  urb_buf, MS912X_MAX_TRANSFER_LENGTH,
 				  ms912x_urb_completion, urb_entry);
@@ -75,7 +79,9 @@ static int ms912x_submit_urb(struct ms912x_device *ms912x, void *buffer,
 	struct ms912x_urb *cur_urb_entry = &ms912x->urbs[current_urb];
 
 	ms912x->current_urb = (current_urb + 1) % MS912X_TOTAL_URBS;
-	wait_for_completion(&cur_urb_entry->done);
+	if(!wait_for_completion_timeout(&cur_urb_entry->done, msecs_to_jiffies(1000))) {
+		return -ETIMEDOUT;
+	}
 	memcpy(cur_urb_entry->urb->transfer_buffer, buffer, length);
 	cur_urb_entry->urb->transfer_buffer_length = length;
 	ret = usb_submit_urb(cur_urb_entry->urb, GFP_KERNEL);
@@ -106,7 +112,7 @@ static inline unsigned int ms912x_rgb_to_v(unsigned int r, unsigned int g,
 }
 
 static int ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer, u32 *xrgb_buffer,
-				      size_t len, u32* temp_buffer)
+				      size_t len, u32 *temp_buffer)
 {
 	unsigned int i, offset = 0;
 	unsigned int pixel1, pixel2;
@@ -164,7 +170,7 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	int y1 = rect->y1;
 	int y2 = min(rect->y2, (int)fb->height);
 	int idx;
-	u32* temp_buffer;
+	u32 *temp_buffer;
 
 	drm_dev_enter(drm, &idx);
 
@@ -193,7 +199,8 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 		const int line_offset = fb->pitches[0] * i;
 		const int byte_offset = line_offset + (x * 4);
 		ms912x_xrgb_to_yuv422_line(transfer_buffer + total_length,
-					   vaddr + byte_offset, width, temp_buffer);
+					   vaddr + byte_offset, width,
+					   temp_buffer);
 		total_length += width * 2;
 	}
 	vfree(temp_buffer);
@@ -210,7 +217,9 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 				      total_length) -
 				  i * MS912X_MAX_TRANSFER_LENGTH;
 
-		ms912x_submit_urb(ms912x, transfer_buffer + i * MS912X_MAX_TRANSFER_LENGTH,
+		ms912x_submit_urb(ms912x,
+				  transfer_buffer +
+					  i * MS912X_MAX_TRANSFER_LENGTH,
 				  transfer_length);
 	}
 
