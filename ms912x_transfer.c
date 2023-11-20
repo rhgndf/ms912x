@@ -8,41 +8,29 @@
 
 void ms912x_free_urb(struct ms912x_device *ms912x)
 {
-	unsigned int i, blocks;
+	unsigned int i;
 	struct ms912x_urb *urb_entry;
 	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
-	blocks = ms912x->num_urbs;
-	for (i = 0; i < blocks; i++) {
-		down(&ms912x->urb_available_list_sem);
 
-		spin_lock_irq(&ms912x->urb_available_list_lock);
-		urb_entry = list_first_entry(&ms912x->urb_available_list,
-					     struct ms912x_urb, entry);
-		list_del(&urb_entry->entry);
-		spin_unlock_irq(&ms912x->urb_available_list_lock);
-
-		usb_free_coherent(usb_dev, MS912X_MAX_TRANSFER_LENGTH,
-				  urb_entry->urb->transfer_buffer,
-				  urb_entry->urb->transfer_dma);
-		usb_free_urb(urb_entry->urb);
-		kfree(urb_entry);
+	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
+		urb_entry = &ms912x->urbs[i];
+		wait_for_completion(&urb_entry->done);
+		if (urb_entry->urb->transfer_buffer)
+			usb_free_coherent(usb_dev, MS912X_MAX_TRANSFER_LENGTH,
+					  urb_entry->urb->transfer_buffer,
+					  urb_entry->urb->transfer_dma);
+		if (urb_entry->urb)
+			usb_free_urb(urb_entry->urb);
 	}
 }
 
 void ms912x_urb_completion(struct urb *urb)
 {
 	struct ms912x_urb *urb_entry = urb->context;
-	struct ms912x_device *ms912x = urb_entry->parent;
-	unsigned long flags;
-
-	spin_lock_irqsave(&ms912x->urb_available_list_lock, flags);
-	list_add_tail(&urb_entry->entry, &ms912x->urb_available_list);
-	spin_unlock_irqrestore(&ms912x->urb_available_list_lock, flags);
-	up(&ms912x->urb_available_list_sem);
-	complete(&ms912x->urb_completion);
+	complete(&urb_entry->done);
 }
 
-int ms912x_init_urb(struct ms912x_device *ms912x, size_t blocks)
+int ms912x_init_urb(struct ms912x_device *ms912x)
 {
 	unsigned int i;
 	struct ms912x_urb *urb_entry;
@@ -50,20 +38,14 @@ int ms912x_init_urb(struct ms912x_device *ms912x, size_t blocks)
 	void *urb_buf;
 	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
 
-	spin_lock_init(&ms912x->urb_available_list_lock);
-	INIT_LIST_HEAD(&ms912x->urb_available_list);
-	sema_init(&ms912x->urb_available_list_sem, 0);
-	ms912x->num_urbs = 0;
-	for (i = 0; i < blocks; i++) {
-		urb_entry = kzalloc(sizeof(struct ms912x_urb), GFP_KERNEL);
-		if (!urb_entry)
-			break;
-		urb_entry->parent = ms912x;
+	ms912x->current_urb = 0;
+	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
+		urb_entry = &ms912x->urbs[i];
 
 		urb = usb_alloc_urb(0, GFP_KERNEL);
 		if (!urb) {
-			kfree(urb_entry);
-			break;
+			ms912x_free_urb(ms912x);
+			return -ENOMEM;
 		}
 		urb_entry->urb = urb;
 
@@ -72,38 +54,36 @@ int ms912x_init_urb(struct ms912x_device *ms912x, size_t blocks)
 					   GFP_KERNEL, &urb->transfer_dma);
 
 		if (!urb_buf) {
-			usb_free_urb(urb);
-			kfree(urb_entry);
-			break;
+			ms912x_free_urb(ms912x);
+			return -ENOMEM;
 		}
+
+		init_completion(&urb_entry->done);
+		complete(&urb_entry->done);
 
 		usb_fill_bulk_urb(urb, usb_dev, usb_sndbulkpipe(usb_dev, 4),
 				  urb_buf, MS912X_MAX_TRANSFER_LENGTH,
 				  ms912x_urb_completion, urb_entry);
-		urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
-		list_add_tail(&urb_entry->entry, &ms912x->urb_available_list);
-		up(&ms912x->urb_available_list_sem);
-		ms912x->num_urbs++;
 	}
-	return ms912x->num_urbs;
+	return 0;
 }
 
-struct urb *ms912x_get_urb(struct ms912x_device *ms912x)
+static int ms912x_submit_urb(struct ms912x_device *ms912x, void *buffer,
+			     size_t length)
 {
-	int ret;
-	struct ms912x_urb *urb_entry;
+	int ret, current_urb = ms912x->current_urb;
+	struct ms912x_urb *cur_urb_entry = &ms912x->urbs[current_urb];
 
-	ret = down_interruptible(&ms912x->urb_available_list_sem);
-	if (ret < 0)
-		return ERR_PTR(ret);
-
-	spin_lock_irq(&ms912x->urb_available_list_lock);
-	urb_entry = list_first_entry(&ms912x->urb_available_list,
-				     struct ms912x_urb, entry);
-	list_del_init(&urb_entry->entry);
-	spin_unlock_irq(&ms912x->urb_available_list_lock);
-
-	return urb_entry->urb;
+	ms912x->current_urb = (current_urb + 1) % MS912X_TOTAL_URBS;
+	wait_for_completion(&cur_urb_entry->done);
+	memcpy(cur_urb_entry->urb->transfer_buffer, buffer, length);
+	cur_urb_entry->urb->transfer_buffer_length = length;
+	ret = usb_submit_urb(cur_urb_entry->urb, GFP_KERNEL);
+	if (ret) {
+		ms912x_urb_completion(cur_urb_entry->urb);
+		return ret;
+	}
+	return 0;
 }
 
 static inline unsigned int ms912x_rgb_to_y(unsigned int r, unsigned int g,
@@ -173,7 +153,6 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	struct ms912x_device *ms912x = to_ms912x(fb->dev);
 	struct drm_device *drm = &ms912x->drm;
 	struct ms912x_frame_update_header header;
-	struct urb *urb;
 	void *transfer_buffer;
 	int total_length = 0;
 	int transfer_blocks, transfer_length;
@@ -225,32 +204,14 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	transfer_blocks =
 		DIV_ROUND_UP(total_length, MS912X_MAX_TRANSFER_LENGTH);
 
-	reinit_completion(&ms912x->urb_completion);
 	for (i = 0; i < transfer_blocks; i++) {
 		/* Last block may be shorter */
-		urb = ms912x_get_urb(ms912x);
-		if (IS_ERR(urb))
-			break;
 		transfer_length = min((i + 1) * MS912X_MAX_TRANSFER_LENGTH,
 				      total_length) -
 				  i * MS912X_MAX_TRANSFER_LENGTH;
 
-		memcpy(urb->transfer_buffer,
-		       transfer_buffer + i * MS912X_MAX_TRANSFER_LENGTH,
-		       transfer_length);
-		urb->transfer_buffer_length = transfer_length;
-		urb->complete = ms912x_urb_completion;
-		ret = usb_submit_urb(urb, GFP_KERNEL);
-		if (ret < 0) {
-			ms912x_urb_completion(urb);
-			break;
-		}
-	}
-	for (i = 0; i < transfer_blocks; i++) {
-		if (!wait_for_completion_timeout(&ms912x->urb_completion,
-						 msecs_to_jiffies(1000))) {
-			break;
-		}
+		ms912x_submit_urb(ms912x, transfer_buffer + i * MS912X_MAX_TRANSFER_LENGTH,
+				  transfer_length);
 	}
 
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);

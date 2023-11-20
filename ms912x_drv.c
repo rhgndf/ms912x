@@ -246,10 +246,9 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		ms912x_read_byte(ms912x, i);
 	}
 
-	// Enough to send a full frame of 1920x1080
-	ms912x_init_urb(ms912x, 64);
-	
-	init_completion(&ms912x->urb_completion);
+	ret = ms912x_init_urb(ms912x);
+	if (ret)
+		goto err_put_device;
 
 	ret = ms912x_connector_init(ms912x);
 	if (ret)

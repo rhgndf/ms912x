@@ -18,6 +18,12 @@
 #define DRIVER_MINOR		0
 #define DRIVER_PATCHLEVEL	1
 
+#define MS912X_TOTAL_URBS   8
+
+struct ms912x_urb {
+	struct urb *urb;
+	struct completion done;
+};
 
 struct ms912x_device {
 	struct drm_device drm;
@@ -27,22 +33,12 @@ struct ms912x_device {
 	struct drm_connector connector;
 	struct drm_simple_display_pipe display_pipe;
 	
-	struct completion urb_completion;
 	struct drm_rect update_rect;
 	void *transfer_buffer;
-	int num_urbs;
-	struct list_head urb_available_list;
-	spinlock_t urb_available_list_lock;
-	struct semaphore urb_available_list_sem;
+	int current_urb;
+	struct ms912x_urb urbs[MS912X_TOTAL_URBS];
 };
 
-struct ms912x_urb {
-	struct list_head entry;
-	struct ms912x_device *parent;
-	struct urb *urb;
-	bool is_temp;
-	bool is_last;
-};
 
 struct ms912x_request {
     u8 type;
@@ -105,8 +101,6 @@ int ms912x_read_byte(struct ms912x_device *ms912x, u16 address);
 int ms912x_connector_init(struct ms912x_device* ms912x);
 int ms912x_set_resolution(struct ms912x_device *ms912x, const struct ms912x_mode* mode);
 
-void ms912x_free_urb(struct ms912x_device *ms912x);
-int ms912x_init_urb(struct ms912x_device *ms912x, size_t total_size);
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
 
@@ -115,5 +109,5 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 				 struct drm_rect *rect);
 
 void ms912x_free_urb(struct ms912x_device *ms912x);
-int ms912x_init_urb(struct ms912x_device *ms912x, size_t total_size);
+int ms912x_init_urb(struct ms912x_device *ms912x);
 #endif
