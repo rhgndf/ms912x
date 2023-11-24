@@ -11,10 +11,13 @@ static int ms912x_read_edid(void *data, u8 *buf, unsigned int block, size_t len)
 {
 	struct ms912x_device *ms912x = data;
 	int offset = block * EDID_LENGTH;
-	int i;
+	int i, ret;
 	for (i = 0; i < len; i++) {
 		u16 address = 0xc000 + offset + i;
-		buf[i] = ms912x_read_byte(ms912x, address);
+		ret = ms912x_read_byte(ms912x, address);
+		if (ret < 0)
+			return ret;
+		buf[i] = ret;
 	}
 	return 0;
 }

@@ -133,6 +133,11 @@ static void ms912x_pipe_enable(struct drm_simple_display_pipe *pipe,
 	ms912x_power_on(ms912x);
 
 	if (crtc_state->mode_changed) {
+		vfree(ms912x->transfer_buffer);
+		vfree(ms912x->temp_buffer);
+		ms912x->transfer_buffer =
+			vmalloc(mode->hdisplay * mode->vdisplay * 2 + 16);
+		ms912x->temp_buffer = vmalloc(mode->hdisplay * sizeof(u32));
 		ms912x_set_resolution(ms912x, ms912x_get_mode(mode));
 	}
 }
@@ -208,7 +213,6 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 			    const struct usb_device_id *id)
 {
 	int ret;
-	unsigned int i;
 	struct ms912x_device *ms912x;
 	struct drm_device *dev;
 
@@ -241,10 +245,8 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ms912x->update_rect.x2 = 0;
 	ms912x->update_rect.y2 = 0;
 
-	// Some dongles need a few reads to be initialized
-	for (i = 0; i < 128; i++) {
-		ms912x_read_byte(ms912x, i);
-	}
+	// This stops weird behaviour in the device
+	ms912x_set_resolution(ms912x, &ms912x_mode_list[0]);
 
 	ret = ms912x_init_urb(ms912x);
 	if (ret)
@@ -253,6 +255,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ret = ms912x_connector_init(ms912x);
 	if (ret)
 		goto err_put_device;
+
 
 	ret = drm_simple_display_pipe_init(&ms912x->drm, &ms912x->display_pipe,
 					   &ms912x_pipe_funcs,
@@ -292,6 +295,8 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
 	ms912x_free_urb(ms912x);
+	vfree(ms912x->transfer_buffer);
+	vfree(ms912x->temp_buffer);
 	put_device(ms912x->dmadev);
 	ms912x->dmadev = NULL;
 }

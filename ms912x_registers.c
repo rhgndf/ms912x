@@ -21,9 +21,10 @@ int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 			      USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
 			      0x0300, 0, request, 8, USB_CTRL_GET_TIMEOUT);
 
-	if (ret < 0)
-		return ret;
-	ret = request->data[0];
+	if (ret > 0)
+		ret = request->data[0];
+	else if (ret == 0)
+		ret = -EIO;
 	kfree(request);
 	return ret;
 }

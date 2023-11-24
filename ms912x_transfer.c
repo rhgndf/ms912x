@@ -10,15 +10,12 @@ void ms912x_free_urb(struct ms912x_device *ms912x)
 {
 	unsigned int i;
 	struct ms912x_urb *urb_entry;
-	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
 
 	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
 		urb_entry = &ms912x->urbs[i];
 		usb_kill_urb(urb_entry->urb);
 		if (urb_entry->urb->transfer_buffer)
-			usb_free_coherent(usb_dev, MS912X_MAX_TRANSFER_LENGTH,
-					  urb_entry->urb->transfer_buffer,
-					  urb_entry->urb->transfer_dma);
+			kfree(urb_entry->urb->transfer_buffer);
 		if (urb_entry->urb)
 			usb_free_urb(urb_entry->urb);
 	}
@@ -56,9 +53,7 @@ int ms912x_init_urb(struct ms912x_device *ms912x)
 		}
 		urb_entry->urb = urb;
 
-		urb_buf =
-			usb_alloc_coherent(usb_dev, MS912X_MAX_TRANSFER_LENGTH,
-					   GFP_KERNEL, &urb->transfer_dma);
+		urb_buf = kmalloc(MS912X_MAX_TRANSFER_LENGTH, GFP_KERNEL);
 
 		if (!urb_buf) {
 			ms912x_free_urb(ms912x);
@@ -79,12 +74,14 @@ static int ms912x_submit_urb(struct ms912x_device *ms912x, void *buffer,
 	struct ms912x_urb *cur_urb_entry = &ms912x->urbs[current_urb];
 
 	ms912x->current_urb = (current_urb + 1) % MS912X_TOTAL_URBS;
-	if(!wait_for_completion_timeout(&cur_urb_entry->done, msecs_to_jiffies(100))) {
+	if (!wait_for_completion_timeout(&cur_urb_entry->done,
+					 msecs_to_jiffies(100))) {
 		return -ETIMEDOUT;
 	}
 	memcpy(cur_urb_entry->urb->transfer_buffer, buffer, length);
 	cur_urb_entry->urb->transfer_buffer_length = length;
 	ret = usb_submit_urb(cur_urb_entry->urb, GFP_KERNEL);
+	drm_warn(&ms912x->drm, "Submitted urb %d, ret %d\n", current_urb, ret);
 	if (ret) {
 		ms912x_urb_completion(cur_urb_entry->urb);
 		return ret;
@@ -148,29 +145,33 @@ static int ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer, u32 *xrgb_buffer,
 	return offset;
 }
 
-static const unsigned char ms912x_end_of_buffer[8] = { 0xff, 0xc0, 0x00, 0x00,
-						       0x00, 0x00, 0x00, 0x00 };
+static const u8 ms912x_end_of_buffer[8] = { 0xff, 0xc0, 0x00, 0x00,
+					    0x00, 0x00, 0x00, 0x00 };
 
 void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 			 const struct iosys_map *map, struct drm_rect *rect)
 {
-	int ret, i;
+	int ret, idx, i;
 	void *vaddr = map->vaddr;
 	struct ms912x_device *ms912x = to_ms912x(fb->dev);
 	struct drm_device *drm = &ms912x->drm;
 	struct ms912x_frame_update_header header;
 	void *transfer_buffer;
-	int total_length = 0;
-	int transfer_blocks, transfer_length;
-	/* Hardware can only update framebuffer in multiples of 16 horizontally */
-	int x = ALIGN_DOWN(rect->x1, 16);
-	/* Resolutions that are not a multiple of 16 like 1366*768 need to align */
-	int width =
-		min(ALIGN(rect->x2, 16), ALIGN_DOWN((int)fb->width, 16)) - x;
-	int y1 = rect->y1;
-	int y2 = min(rect->y2, (int)fb->height);
-	int idx;
 	u32 *temp_buffer;
+	size_t transfer_blocks, transfer_length, total_length = 0;
+	int x, width, y1, y2;
+
+	/* Seems like hardware can only update framebuffer in multiples of 16 horizontally */
+	x = ALIGN_DOWN(rect->x1, 16);
+	/* Resolutions that are not a multiple of 16 like 1366*768 need to align */
+	width = min(ALIGN(rect->x2, 16), ALIGN_DOWN((int)fb->width, 16)) - x;
+	transfer_buffer = ms912x->transfer_buffer;
+	y1 = rect->y1;
+	y2 = min(rect->y2, (int)fb->height);
+
+	temp_buffer = ms912x->temp_buffer;
+	if (!transfer_buffer || !temp_buffer)
+		return;
 
 	drm_dev_enter(drm, &idx);
 
@@ -183,18 +184,13 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	header.width = width / 16;
 	header.height = cpu_to_be16(drm_rect_height(rect));
 
-	transfer_buffer = vmalloc(width * drm_rect_height(rect) * 2 + 16);
-	if (!transfer_buffer)
-		goto dev_exit;
-
 	ret = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
 	if (ret < 0)
-		goto free_transfer_buffer;
+		goto dev_exit;
 
-	memcpy(transfer_buffer, &header, 8);
-	total_length += 8;
+	memcpy(transfer_buffer, &header, sizeof(header));
+	total_length += sizeof(header);
 
-	temp_buffer = vmalloc(width * sizeof(u32));
 	for (i = y1; i < y2; i++) {
 		const int line_offset = fb->pitches[0] * i;
 		const int byte_offset = line_offset + (x * 4);
@@ -203,20 +199,22 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 					   temp_buffer);
 		total_length += width * 2;
 	}
-	vfree(temp_buffer);
 
-	memcpy(transfer_buffer + total_length, ms912x_end_of_buffer, 8);
-	total_length += 8;
+	memcpy(transfer_buffer + total_length, ms912x_end_of_buffer,
+	       sizeof(ms912x_end_of_buffer));
+	total_length += sizeof(ms912x_end_of_buffer);
 
 	transfer_blocks =
 		DIV_ROUND_UP(total_length, MS912X_MAX_TRANSFER_LENGTH);
 
 	for (i = 0; i < transfer_blocks; i++) {
 		/* Last block may be shorter */
-		transfer_length = min((i + 1) * MS912X_MAX_TRANSFER_LENGTH,
-				      total_length) -
-				  i * MS912X_MAX_TRANSFER_LENGTH;
-
+		transfer_length =
+			min(((size_t)i + 1) * MS912X_MAX_TRANSFER_LENGTH,
+			    total_length) -
+			i * MS912X_MAX_TRANSFER_LENGTH;
+		drm_warn(drm, "Submitting block %d, length %zu\n", i,
+			 transfer_length);
 		ms912x_submit_urb(ms912x,
 				  transfer_buffer +
 					  i * MS912X_MAX_TRANSFER_LENGTH,
@@ -224,8 +222,6 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 	}
 
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
-free_transfer_buffer:
-	vfree(transfer_buffer);
 dev_exit:
 	drm_dev_exit(idx);
 }

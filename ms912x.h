@@ -35,6 +35,8 @@ struct ms912x_device {
 	
 	struct drm_rect update_rect;
 	void *transfer_buffer;
+	void *temp_buffer;
+	
 	int current_urb;
 	struct ms912x_urb urbs[MS912X_TOTAL_URBS];
 };
