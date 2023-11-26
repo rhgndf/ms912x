@@ -81,7 +81,6 @@ static int ms912x_submit_urb(struct ms912x_device *ms912x, void *buffer,
 	memcpy(cur_urb_entry->urb->transfer_buffer, buffer, length);
 	cur_urb_entry->urb->transfer_buffer_length = length;
 	ret = usb_submit_urb(cur_urb_entry->urb, GFP_KERNEL);
-	drm_warn(&ms912x->drm, "Submitted urb %d, ret %d\n", current_urb, ret);
 	if (ret) {
 		ms912x_urb_completion(cur_urb_entry->urb);
 		return ret;
@@ -213,8 +212,7 @@ void ms912x_fb_send_rect(struct drm_framebuffer *fb,
 			min(((size_t)i + 1) * MS912X_MAX_TRANSFER_LENGTH,
 			    total_length) -
 			i * MS912X_MAX_TRANSFER_LENGTH;
-		drm_warn(drm, "Submitting block %d, length %zu\n", i,
-			 transfer_length);
+			
 		ms912x_submit_urb(ms912x,
 				  transfer_buffer +
 					  i * MS912X_MAX_TRANSFER_LENGTH,
