@@ -75,7 +75,7 @@ static int ms912x_submit_urb(struct ms912x_device *ms912x, void *buffer,
 
 	ms912x->current_urb = (current_urb + 1) % MS912X_TOTAL_URBS;
 	if (!wait_for_completion_timeout(&cur_urb_entry->done,
-					 msecs_to_jiffies(100))) {
+					 msecs_to_jiffies(10))) {
 		return -ETIMEDOUT;
 	}
 	memcpy(cur_urb_entry->urb->transfer_buffer, buffer, length);
