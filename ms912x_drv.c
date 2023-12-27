@@ -133,11 +133,6 @@ static void ms912x_pipe_enable(struct drm_simple_display_pipe *pipe,
 	ms912x_power_on(ms912x);
 
 	if (crtc_state->mode_changed) {
-		vfree(ms912x->transfer_buffer);
-		vfree(ms912x->temp_buffer);
-		ms912x->transfer_buffer =
-			vmalloc(mode->hdisplay * mode->vdisplay * 2 + 16);
-		ms912x->temp_buffer = vmalloc(mode->hdisplay * sizeof(u32));
 		ms912x_set_resolution(ms912x, ms912x_get_mode(mode));
 	}
 }
@@ -186,13 +181,19 @@ static void ms912x_pipe_update(struct drm_simple_display_pipe *pipe,
 	struct drm_rect current_rect, rect;
 
 	if (drm_atomic_helper_damage_merged(old_state, state, &current_rect)) {
-		// The device double buffers, so we need to send the update
-		// rects of the last two frames.
+		/* The device double buffers, so we need to send the update
+		 * rects of the last two frames.
+		 */
 		ms912x = to_ms912x(state->fb->dev);
 		ms912x_merge_rects(&rect, &current_rect, &ms912x->update_rect);
-		ms912x_fb_send_rect(state->fb, &shadow_plane_state->data[0],
-				     &rect);
-		ms912x->update_rect = current_rect;
+		if (ms912x_fb_send_rect(state->fb, &shadow_plane_state->data[0],
+					&rect)) {
+			/* In case of error, merge the rects to update later */
+			ms912x_merge_rects(&ms912x->update_rect,
+					   &ms912x->update_rect, &rect);
+		} else {
+			ms912x->update_rect = current_rect;
+		}
 	}
 }
 
@@ -233,29 +234,29 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		goto err_put_device;
 
-	/* No idea */
 	dev->mode_config.min_width = 0;
-	dev->mode_config.max_width = 10000;
+	dev->mode_config.max_width = 2048;
 	dev->mode_config.min_height = 0;
-	dev->mode_config.max_height = 10000;
+	dev->mode_config.max_height = 2048;
 	dev->mode_config.funcs = &ms912x_mode_config_funcs;
 
-	ms912x->update_rect.x1 = 0;
-	ms912x->update_rect.y1 = 0;
-	ms912x->update_rect.x2 = 0;
-	ms912x->update_rect.y2 = 0;
-
-	// This stops weird behaviour in the device
+	/* This stops weird behavior in the device */
 	ms912x_set_resolution(ms912x, &ms912x_mode_list[0]);
 
-	ret = ms912x_init_urb(ms912x);
+	ret = ms912x_init_request(ms912x, &ms912x->requests[0],
+				  2048 * 2048 * 2);
 	if (ret)
 		goto err_put_device;
+
+	ret = ms912x_init_request(ms912x, &ms912x->requests[1],
+				  2048 * 2048 * 2);
+	if (ret)
+		goto err_put_device;
+	complete(&ms912x->requests[1].done);
 
 	ret = ms912x_connector_init(ms912x);
 	if (ret)
 		goto err_put_device;
-
 
 	ret = drm_simple_display_pipe_init(&ms912x->drm, &ms912x->display_pipe,
 					   &ms912x_pipe_funcs,
@@ -291,12 +292,13 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	struct ms912x_device *ms912x = usb_get_intfdata(interface);
 	struct drm_device *dev = &ms912x->drm;
 
+	cancel_work_sync(&ms912x->requests[0].work);
+	cancel_work_sync(&ms912x->requests[1].work);
 	drm_kms_helper_poll_fini(dev);
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
-	ms912x_free_urb(ms912x);
-	vfree(ms912x->transfer_buffer);
-	vfree(ms912x->temp_buffer);
+	ms912x_free_request(&ms912x->requests[0]);
+	ms912x_free_request(&ms912x->requests[1]);
 	put_device(ms912x->dmadev);
 	ms912x->dmadev = NULL;
 }

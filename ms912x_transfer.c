@@ -6,86 +6,79 @@
 
 #include "ms912x.h"
 
-void ms912x_free_urb(struct ms912x_device *ms912x)
+static void ms912x_request_timeout(struct timer_list *t)
 {
-	unsigned int i;
-	struct ms912x_urb *urb_entry;
-
-	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
-		urb_entry = &ms912x->urbs[i];
-		usb_kill_urb(urb_entry->urb);
-		if (urb_entry->urb->transfer_buffer)
-			kfree(urb_entry->urb->transfer_buffer);
-		if (urb_entry->urb)
-			usb_free_urb(urb_entry->urb);
-	}
+	struct ms912x_usb_request *request = from_timer(request, t, timer);
+	usb_sg_cancel(&request->sgr);
 }
 
-void ms912x_urb_completion(struct urb *urb)
+static void ms912x_request_work(struct work_struct *work)
 {
-	struct ms912x_urb *urb_entry = urb->context;
-	complete(&urb_entry->done);
+	struct ms912x_usb_request *request =
+		container_of(work, struct ms912x_usb_request, work);
+	struct ms912x_device *ms912x = request->ms912x;
+	struct usb_device *usbdev = interface_to_usbdev(ms912x->intf);
+	struct usb_sg_request *sgr = &request->sgr;
+	struct sg_table *transfer_sgt = &request->transfer_sgt;
+
+	timer_setup(&request->timer, ms912x_request_timeout, 0);
+	usb_sg_init(sgr, usbdev, usb_sndbulkpipe(usbdev, 0x04), 0,
+		    transfer_sgt->sgl, transfer_sgt->nents,
+		    request->transfer_len, GFP_KERNEL);
+	mod_timer(&request->timer, jiffies + msecs_to_jiffies(5000));
+	usb_sg_wait(sgr);
+	del_timer_sync(&request->timer);
+	complete(&request->done);
 }
 
-int ms912x_init_urb(struct ms912x_device *ms912x)
+void ms912x_free_request(struct ms912x_usb_request *request)
 {
-	unsigned int i;
-	struct ms912x_urb *urb_entry;
-	struct urb *urb;
-	void *urb_buf;
-	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
+	if (!request->transfer_buffer)
+		return;
+	sg_free_table(&request->transfer_sgt);
+	vfree(request->transfer_buffer);
+	request->transfer_buffer = NULL;
+	request->alloc_len = 0;
+}
 
-	ms912x->current_urb = 0;
+int ms912x_init_request(struct ms912x_device *ms912x,
+			struct ms912x_usb_request *request, size_t len)
+{
+	int ret, i;
+	unsigned int num_pages;
+	void *data;
+	struct page **pages;
+	void *ptr;
 
-	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
-		urb_entry = &ms912x->urbs[i];
-		init_completion(&urb_entry->done);
-		complete(&urb_entry->done);
+	data = vmalloc_32(len);
+	if (!data)
+		return -ENOMEM;
+
+	num_pages = DIV_ROUND_UP(len, PAGE_SIZE);
+	pages = kmalloc_array(num_pages, sizeof(struct page *), GFP_KERNEL);
+	if (!pages) {
+		ret = -ENOMEM;
+		goto err_vfree;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(ms912x->urbs); i++) {
-		urb_entry = &ms912x->urbs[i];
+	for (i = 0, ptr = data; i < num_pages; i++, ptr += PAGE_SIZE)
+		pages[i] = vmalloc_to_page(ptr);
+	ret = sg_alloc_table_from_pages(&request->transfer_sgt, pages,
+					num_pages, 0, len, GFP_KERNEL);
+	kfree(pages);
+	if (ret)
+		goto err_vfree;
 
-		urb = usb_alloc_urb(0, GFP_KERNEL);
-		if (!urb) {
-			ms912x_free_urb(ms912x);
-			return -ENOMEM;
-		}
-		urb_entry->urb = urb;
+	request->alloc_len = len;
+	request->transfer_buffer = data;
+	request->ms912x = ms912x;
 
-		urb_buf = kmalloc(MS912X_MAX_TRANSFER_LENGTH, GFP_KERNEL);
-
-		if (!urb_buf) {
-			ms912x_free_urb(ms912x);
-			return -ENOMEM;
-		}
-
-		usb_fill_bulk_urb(urb, usb_dev, usb_sndbulkpipe(usb_dev, 4),
-				  urb_buf, MS912X_MAX_TRANSFER_LENGTH,
-				  ms912x_urb_completion, urb_entry);
-	}
+	init_completion(&request->done);
+	INIT_WORK(&request->work, ms912x_request_work);
 	return 0;
-}
-
-static int ms912x_submit_urb(struct ms912x_device *ms912x, void *buffer,
-			     size_t length)
-{
-	int ret, current_urb = ms912x->current_urb;
-	struct ms912x_urb *cur_urb_entry = &ms912x->urbs[current_urb];
-
-	ms912x->current_urb = (current_urb + 1) % MS912X_TOTAL_URBS;
-	if (!wait_for_completion_timeout(&cur_urb_entry->done,
-					 msecs_to_jiffies(10))) {
-		return -ETIMEDOUT;
-	}
-	memcpy(cur_urb_entry->urb->transfer_buffer, buffer, length);
-	cur_urb_entry->urb->transfer_buffer_length = length;
-	ret = usb_submit_urb(cur_urb_entry->urb, GFP_KERNEL);
-	if (ret) {
-		ms912x_urb_completion(cur_urb_entry->urb);
-		return ret;
-	}
-	return 0;
+err_vfree:
+	vfree(data);
+	return ret;
 }
 
 static inline unsigned int ms912x_rgb_to_y(unsigned int r, unsigned int g,
@@ -107,15 +100,17 @@ static inline unsigned int ms912x_rgb_to_v(unsigned int r, unsigned int g,
 	return v >> 16;
 }
 
-static int ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer, u32 *xrgb_buffer,
-				      size_t len, u32 *temp_buffer)
+static int ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
+				      struct iosys_map *xrgb_buffer,
+				      size_t offset, size_t width,
+				      u32 *temp_buffer)
 {
-	unsigned int i, offset = 0;
+	unsigned int i, dst_offset = 0;
 	unsigned int pixel1, pixel2;
 	unsigned int r1, g1, b1, r2, g2, b2;
 	unsigned int v, y1, u, y2;
-	memcpy(temp_buffer, xrgb_buffer, len * sizeof(u32));
-	for (i = 0; i < len; i += 2) {
+	iosys_map_memcpy_from(temp_buffer, xrgb_buffer, offset, width * 4);
+	for (i = 0; i < width; i += 2) {
 		pixel1 = temp_buffer[i];
 		pixel2 = temp_buffer[i + 1];
 
@@ -136,10 +131,10 @@ static int ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer, u32 *xrgb_buffer,
 		     ms912x_rgb_to_u(r2, g2, b2)) /
 		    2;
 
-		transfer_buffer[offset++] = u;
-		transfer_buffer[offset++] = y1;
-		transfer_buffer[offset++] = v;
-		transfer_buffer[offset++] = y2;
+		transfer_buffer[dst_offset++] = u;
+		transfer_buffer[dst_offset++] = y1;
+		transfer_buffer[dst_offset++] = v;
+		transfer_buffer[dst_offset++] = y2;
 	}
 	return offset;
 }
@@ -147,79 +142,91 @@ static int ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer, u32 *xrgb_buffer,
 static const u8 ms912x_end_of_buffer[8] = { 0xff, 0xc0, 0x00, 0x00,
 					    0x00, 0x00, 0x00, 0x00 };
 
-void ms912x_fb_send_rect(struct drm_framebuffer *fb,
-			 const struct iosys_map *map, struct drm_rect *rect)
+static int ms912x_fb_xrgb8888_to_yuv422(void *dst, const struct iosys_map *src,
+					struct drm_framebuffer *fb,
+					struct drm_rect *rect)
 {
-	int ret, idx, i;
-	void *vaddr = map->vaddr;
+	struct ms912x_frame_update_header *header =
+		(struct ms912x_frame_update_header *)dst;
+	struct iosys_map fb_map;
+	int i, x, y1, y2, width;
+	void *temp_buffer;
+
+	y1 = rect->y1;
+	y2 = min((unsigned int)rect->y2, fb->height);
+	x = rect->x1;
+	width = drm_rect_width(rect);
+
+	temp_buffer = kmalloc(width * 4, GFP_KERNEL);
+	if (!temp_buffer)
+		return -ENOMEM;
+
+	header->header = cpu_to_be16(0xff00);
+	header->x = x / 16;
+	header->y = cpu_to_be16(y1);
+	header->width = width / 16;
+	header->height = cpu_to_be16(drm_rect_height(rect));
+	dst += sizeof(*header);
+
+	fb_map = IOSYS_MAP_INIT_OFFSET(src, y1 * fb->pitches[0]);
+	for (i = y1; i < y2; i++) {
+		ms912x_xrgb_to_yuv422_line(dst, &fb_map, x * 4, width, temp_buffer);
+		iosys_map_incr(&fb_map, fb->pitches[0]);
+		dst += width * 2;
+	}
+
+	kfree(temp_buffer);
+	memcpy(dst, ms912x_end_of_buffer, sizeof(ms912x_end_of_buffer));
+	return 0;
+}
+
+int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
+			struct drm_rect *rect)
+{
+	int ret = 0, idx;
 	struct ms912x_device *ms912x = to_ms912x(fb->dev);
 	struct drm_device *drm = &ms912x->drm;
-	struct ms912x_frame_update_header header;
-	void *transfer_buffer;
-	u32 *temp_buffer;
-	size_t transfer_blocks, transfer_length, total_length = 0;
-	int x, width, y1, y2;
+	struct ms912x_usb_request *prev_request, *current_request;
+	int x, width;
 
-	/* Seems like hardware can only update framebuffer in multiples of 16 horizontally */
+	/* Seems like hardware can only update framebuffer 
+	 * in multiples of 16 horizontally
+	 */
 	x = ALIGN_DOWN(rect->x1, 16);
-	/* Resolutions that are not a multiple of 16 like 1366*768 need to align */
+	/* Resolutions that are not a multiple of 16 like 1366*768 
+	 * need to be aligned
+	 */
 	width = min(ALIGN(rect->x2, 16), ALIGN_DOWN((int)fb->width, 16)) - x;
-	transfer_buffer = ms912x->transfer_buffer;
-	y1 = rect->y1;
-	y2 = min(rect->y2, (int)fb->height);
-
-	temp_buffer = ms912x->temp_buffer;
-	if (!transfer_buffer || !temp_buffer)
-		return;
-
-	drm_dev_enter(drm, &idx);
-
 	rect->x1 = x;
 	rect->x2 = x + width;
+	current_request = &ms912x->requests[ms912x->current_request];
+	prev_request = &ms912x->requests[1 - ms912x->current_request];
 
-	header.header = cpu_to_be16(0xff00);
-	header.x = x / 16;
-	header.y = cpu_to_be16(y1);
-	header.width = width / 16;
-	header.height = cpu_to_be16(drm_rect_height(rect));
+	drm_dev_enter(drm, &idx);
 
 	ret = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
 	if (ret < 0)
 		goto dev_exit;
 
-	memcpy(transfer_buffer, &header, sizeof(header));
-	total_length += sizeof(header);
-
-	for (i = y1; i < y2; i++) {
-		const int line_offset = fb->pitches[0] * i;
-		const int byte_offset = line_offset + (x * 4);
-		ms912x_xrgb_to_yuv422_line(transfer_buffer + total_length,
-					   vaddr + byte_offset, width,
-					   temp_buffer);
-		total_length += width * 2;
-	}
-
-	memcpy(transfer_buffer + total_length, ms912x_end_of_buffer,
-	       sizeof(ms912x_end_of_buffer));
-	total_length += sizeof(ms912x_end_of_buffer);
-
-	transfer_blocks =
-		DIV_ROUND_UP(total_length, MS912X_MAX_TRANSFER_LENGTH);
-
-	for (i = 0; i < transfer_blocks; i++) {
-		/* Last block may be shorter */
-		transfer_length =
-			min(((size_t)i + 1) * MS912X_MAX_TRANSFER_LENGTH,
-			    total_length) -
-			i * MS912X_MAX_TRANSFER_LENGTH;
-			
-		ms912x_submit_urb(ms912x,
-				  transfer_buffer +
-					  i * MS912X_MAX_TRANSFER_LENGTH,
-				  transfer_length);
-	}
-
+	ret = ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer,
+					   map, fb, rect);
+	
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
+	if (ret < 0)
+		goto dev_exit;
+
+	/* Sending frames too fast, drop it */
+	if (!wait_for_completion_timeout(&prev_request->done,
+					 msecs_to_jiffies(10))) {
+
+		ret = -ETIMEDOUT;
+		goto dev_exit;
+	}
+
+	current_request->transfer_len = width * 2 * drm_rect_height(rect) + 16;
+	queue_work(system_long_wq, &current_request->work);
+	ms912x->current_request = 1 - ms912x->current_request;
 dev_exit:
 	drm_dev_exit(idx);
+	return ret;
 }
