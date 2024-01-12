@@ -90,19 +90,16 @@ static const struct ms912x_mode ms912x_mode_list[] = {
 	MS912X_MODE(1680, 1050, 60, 0x7800, MS912X_PIXFMT_UYVY),
 	MS912X_MODE(1920, 1080, 60, 0x8100, MS912X_PIXFMT_UYVY),
 
-	/* CEA mode numbers seem to work */
-	/*MS912X_MODE(1280,  720, 60, 0x0400, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1920, 1080, 60, 0x1000, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280,  720, 50, 0x1300, MS912X_PIXFMT_UYVY),
-
-	MS912X_MODE(1920, 1080, 50, 0x1f00, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1920, 1080, 24, 0x2000, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1920, 1080, 25, 0x2100, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1920, 1080, 30, 0x2200, MS912X_PIXFMT_UYVY),
-
-	MS912X_MODE(1280,  720, 24, 0x3c00, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280,  720, 25, 0x3d00, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280,  720, 30, 0x3e00, MS912X_PIXFMT_UYVY),*/
+	/* Dumped from the device */
+	MS912X_MODE( 720,  480, 60, 0x0200, MS912X_PIXFMT_UYVY),
+	MS912X_MODE( 720,  576, 60, 0x1100, MS912X_PIXFMT_UYVY),
+	MS912X_MODE( 640,  480, 60, 0x4000, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(1024,  768, 60, 0x4900, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(1280,  600, 60, 0x4e00, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(1280,  768, 60, 0x5400, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(1280, 1024, 60, 0x6100, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(1360,  768, 60, 0x6400, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(1600, 1200, 60, 0x7300, MS912X_PIXFMT_UYVY),
 	/* TODO: more mode numbers? */
 };
 
@@ -251,12 +248,12 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ret = ms912x_init_request(ms912x, &ms912x->requests[1],
 				  2048 * 2048 * 2);
 	if (ret)
-		goto err_put_device;
+		goto err_free_request_0;
 	complete(&ms912x->requests[1].done);
 
 	ret = ms912x_connector_init(ms912x);
 	if (ret)
-		goto err_put_device;
+		goto err_free_request_1;
 
 	ret = drm_simple_display_pipe_init(&ms912x->drm, &ms912x->display_pipe,
 					   &ms912x_pipe_funcs,
@@ -264,7 +261,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 					   ARRAY_SIZE(ms912x_pipe_formats),
 					   NULL, &ms912x->connector);
 	if (ret)
-		goto err_put_device;
+		goto err_free_request_1;
 
 	drm_plane_enable_fb_damage_clips(&ms912x->display_pipe.plane);
 
@@ -276,12 +273,16 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	ret = drm_dev_register(dev, 0);
 	if (ret)
-		goto err_put_device;
+		goto err_free_request_1;
 
 	drm_fbdev_generic_setup(dev, 0);
 
 	return 0;
 
+err_free_request_1:
+	ms912x_free_request(&ms912x->requests[1]);
+err_free_request_0:
+	ms912x_free_request(&ms912x->requests[0]);
 err_put_device:
 	put_device(ms912x->dmadev);
 	return ret;
