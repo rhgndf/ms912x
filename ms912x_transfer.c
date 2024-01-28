@@ -188,6 +188,7 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	struct ms912x_device *ms912x = to_ms912x(fb->dev);
 	struct drm_device *drm = &ms912x->drm;
 	struct ms912x_usb_request *prev_request, *current_request;
+	void *vaddr;
 	int x, width;
 
 	/* Seems like hardware can only update framebuffer 
