@@ -305,8 +305,12 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 }
 
 static const struct usb_device_id id_table[] = {
+	/* USB 2 */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x534d, 0x6021, 0xff, 0x00, 0x00) },
+	/* USB 2 Sometimes this PID will pop up*/
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x534d, 0x0821, 0xff, 0x00, 0x00) },
+	/* USB 3 */
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9132, 0xff, 0x00, 0x00) },
 	{},
 };
 MODULE_DEVICE_TABLE(usb, id_table);
