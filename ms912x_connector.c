@@ -27,7 +27,7 @@ static int ms912x_connector_get_modes(struct drm_connector *connector)
 	int ret;
 	struct ms912x_device *ms912x = to_ms912x(connector->dev);
 	struct edid *edid;
-	edid = drm_do_get_edid(connector, ms912x_read_edid, ms912x);
+	edid = drm_edid_read_custom(connector, ms912x_read_edid, ms912x);
 	drm_connector_update_edid_property(connector, edid);
 	ret = drm_add_edid_modes(connector, edid);
 	kfree(edid);
