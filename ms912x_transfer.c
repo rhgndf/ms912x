@@ -1,5 +1,6 @@
 
 #include <linux/dma-buf.h>
+#include <linux/vmalloc.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_gem_framebuffer_helper.h>

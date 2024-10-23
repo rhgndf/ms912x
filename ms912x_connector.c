@@ -26,7 +26,7 @@ static int ms912x_connector_get_modes(struct drm_connector *connector)
 {
 	int ret;
 	struct ms912x_device *ms912x = to_ms912x(connector->dev);
-	struct drm_edid *edid;
+	const struct drm_edid *edid;
 	edid = drm_edid_read_custom(connector, ms912x_read_edid, ms912x);
 	if (!edid)
 		return 0;
