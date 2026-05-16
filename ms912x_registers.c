@@ -1,11 +1,10 @@
-#include <uapi/linux/hid.h>
+#include <linux/hid.h>
 #include "ms912x.h"
 
 int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 {
 	int ret;
-	struct usb_interface *intf = ms912x->intf;
-	struct usb_device *usb_dev = interface_to_usbdev(intf);
+	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
 	struct ms912x_request *request = kzalloc(8, GFP_KERNEL);
 
 	if (!request)
@@ -25,6 +24,41 @@ int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 			      0x0300, 0, request, 8, USB_CTRL_GET_TIMEOUT);
 
 	ret = (ret > 0) ? request->data[0] : (ret == 0) ? -EIO : ret;
+
+	kfree(request);
+	return ret;
+}
+
+int ms912x_read_block(struct ms912x_device *ms912x, u16 address, u8 *buf, size_t len)
+{
+	int ret;
+	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
+	struct ms912x_block_request *request = kzalloc(sizeof(*request), GFP_KERNEL);
+
+	if (!request)
+		return -ENOMEM;
+
+	if (len > 61) len = 61;
+
+	request->type = 0xb5;
+	request->addr = cpu_to_be16(address);
+
+	usb_control_msg(usb_dev, usb_sndctrlpipe(usb_dev, 0),
+			HID_REQ_SET_REPORT,
+			USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+			0x0300, 0, request, 8, USB_CTRL_SET_TIMEOUT);
+
+	ret = usb_control_msg(usb_dev, usb_rcvctrlpipe(usb_dev, 0),
+			      HID_REQ_GET_REPORT,
+			      USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+			      0x0300, 0, request, 64, USB_CTRL_GET_TIMEOUT);
+
+	if (ret > 3) {
+		memcpy(buf, request->data, min_t(size_t, len, ret - 3));
+		ret = 0;
+	} else {
+		ret = (ret < 0) ? ret : -EIO;
+	}
 
 	kfree(request);
 	return ret;

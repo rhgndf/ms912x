@@ -255,9 +255,9 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	if (ret < 0)
 		goto dev_exit;
 
-	/* Sending frames too fast, drop it */
+	/* Sending frames too fast, wait up to 60ms before dropping */
 	if (!wait_for_completion_timeout(&prev_request->done,
-					 msecs_to_jiffies(1))) {
+					 msecs_to_jiffies(60))) {
 		ret = -ETIMEDOUT;
 		goto dev_exit;
 	}

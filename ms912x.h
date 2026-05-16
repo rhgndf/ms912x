@@ -58,6 +58,12 @@ struct ms912x_request {
 	u8 data[5];
 } __attribute__((packed));
 
+struct ms912x_block_request {
+	u8 type;
+	__be16 addr;
+	u8 data[61];
+} __attribute__((packed));
+
 struct ms912x_write_request {
 	u8 type;
 	u8 addr;
@@ -105,6 +111,7 @@ struct ms912x_mode {
 #define to_ms912x(x) container_of(x, struct ms912x_device, drm)
 
 int ms912x_read_byte(struct ms912x_device *ms912x, u16 address);
+int ms912x_read_block(struct ms912x_device *ms912x, u16 address, u8 *buf, size_t len);
 int ms912x_connector_init(struct ms912x_device *ms912x);
 int ms912x_set_resolution(struct ms912x_device *ms912x,
 			  const struct ms912x_mode *mode);
