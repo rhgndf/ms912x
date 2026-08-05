@@ -12,3 +12,7 @@ modules.order
 .project
 .settings
 .cache.mk
+compile_commands.json
+CONTEXT.md
+DOCS.md
+GEMINI.md

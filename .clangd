@@ -1,0 +1,20 @@
+CompileFlags:
+  Remove: [
+    -mpreferred-stack-boundary=*,
+    -mindirect-branch=*,
+    -mindirect-branch-register,
+    -fno-allow-store-data-races,
+    -fzero-init-padding-bits=*,
+    -fdiagnostics-show-context=*,
+    -fmin-function-alignment=*,
+    -fconserve-stack,
+    -fsanitize=bounds-strict,
+    -fsanitize=shift,
+    -mstack-protector-guard-reg=*,
+    -mstack-protector-guard-symbol=*,
+    -mindirect-branch-cs-prefix,
+    -mfunction-return=*,
+    -fpatchable-function-entry=*,
+    -fstrict-flex-arrays=*,
+    -fno-builtin-wcslen
+  ]

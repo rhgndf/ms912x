@@ -1,4 +1,4 @@
-#include <drm/drm_atomic_state_helper.h>
+#include <drm/drm_atomic_helper.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_modeset_helper_vtables.h>
@@ -10,12 +10,13 @@ static int ms912x_read_edid_block(struct ms912x_device *ms912x, u8 *buf,
 				  unsigned int offset, size_t len)
 {
 	const u16 base = 0xc000 + offset;
-	for (size_t i = 0; i < len; i++) {
-		u16 address = base + i;
-		int ret = ms912x_read_byte(ms912x, address);
+	size_t read = 0;
+	while (read < len) {
+		size_t to_read = min_t(size_t, len - read, 60);
+		int ret = ms912x_read_block(ms912x, base + read, buf + read, to_read);
 		if (ret < 0)
 			return ret;
-		buf[i] = ret;
+		read += to_read;
 	}
 	return 0;
 }

@@ -3,10 +3,11 @@
 #include <linux/module.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/clients/drm_client_setup.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fb_helper.h>
-#include <drm/drm_fbdev_ttm.h>
+#include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
@@ -20,7 +21,7 @@
 #include <linux/mutex.h>
 
 #include "ms912x.h"
-
+	
 static int ms912x_usb_suspend(struct usb_interface *interface,
 			      pm_message_t message)
 {
@@ -57,7 +58,7 @@ static const struct drm_driver driver = {
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
-	DRM_FBDEV_TTM_DRIVER_OPS,
+	DRM_FBDEV_SHMEM_DRIVER_OPS,
 };
 
 static const struct drm_mode_config_funcs ms912x_mode_config_funcs = {
@@ -296,7 +297,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		goto err_free_request_1;
 
-	drm_client_setup(dev, 0);
+	drm_client_setup(dev, NULL);
 
 	return 0;
 
@@ -316,9 +317,9 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 
 	cancel_work_sync(&ms912x->requests[0].work);
 	cancel_work_sync(&ms912x->requests[1].work);
+	drm_atomic_helper_shutdown(dev);
 	drm_kms_helper_poll_fini(dev);
 	drm_dev_unplug(dev);
-	drm_atomic_helper_shutdown(dev);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
 	put_device(ms912x->dmadev);
@@ -329,6 +330,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x534d, 0x6021, 0xff, 0x00, 0x00) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x534d, 0x0821, 0xff, 0x00, 0x00) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9132, 0xff, 0x00, 0x00) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9133, 0xff, 0x00, 0x00) },
 	{},
 };
 MODULE_DEVICE_TABLE(usb, id_table);
