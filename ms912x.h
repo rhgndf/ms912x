@@ -23,6 +23,7 @@
 
 struct ms912x_usb_request {
 	void *transfer_buffer;
+	void *temp_buffer;
 	struct ms912x_device *ms912x;
 	size_t transfer_len;
 	size_t alloc_len;
@@ -40,7 +41,7 @@ struct ms912x_device {
 
 	struct drm_connector connector;
 	struct drm_simple_display_pipe display_pipe;
-	
+
 	struct drm_rect update_rect;
 
 	/* Double buffer to allow memcpy and transfer 
@@ -48,12 +49,19 @@ struct ms912x_device {
 	 */
 	int current_request;
 	struct ms912x_usb_request requests[2];
+	unsigned long last_send_jiffies;
 };
 
 struct ms912x_request {
 	u8 type;
 	__be16 addr;
 	u8 data[5];
+} __attribute__((packed));
+
+struct ms912x_block_request {
+	u8 type;
+	__be16 addr;
+	u8 data[61];
 } __attribute__((packed));
 
 struct ms912x_write_request {
@@ -103,6 +111,7 @@ struct ms912x_mode {
 #define to_ms912x(x) container_of(x, struct ms912x_device, drm)
 
 int ms912x_read_byte(struct ms912x_device *ms912x, u16 address);
+int ms912x_read_block(struct ms912x_device *ms912x, u16 address, u8 *buf, size_t len);
 int ms912x_connector_init(struct ms912x_device *ms912x);
 int ms912x_set_resolution(struct ms912x_device *ms912x,
 			  const struct ms912x_mode *mode);
@@ -116,4 +125,5 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 void ms912x_free_request(struct ms912x_usb_request *request);
 int ms912x_init_request(struct ms912x_device *ms912x,
 			struct ms912x_usb_request *request, size_t len);
+void ms912x_init_yuv_lut(void);
 #endif
