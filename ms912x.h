@@ -13,7 +13,6 @@
 
 #define DRIVER_NAME "ms912x"
 #define DRIVER_DESC "MacroSilicon USB to VGA/HDMI"
-#define DRIVER_DATE "20220101"
 
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 0
@@ -36,7 +35,6 @@ struct ms912x_usb_request {
 struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
-	struct device *dmadev;
 
 	struct drm_connector connector;
 	struct drm_simple_display_pipe display_pipe;

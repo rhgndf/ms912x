@@ -2,12 +2,12 @@
 
 #include <linux/module.h>
 
+#include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_helper.h>
-#include <drm/drm_fbdev_ttm.h>
+#include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
@@ -35,21 +35,6 @@ static int ms912x_usb_resume(struct usb_interface *interface)
 	return drm_mode_config_helper_resume(dev);
 }
 
-/*
- * FIXME: Dma-buf sharing requires DMA support by the importing device.
- *        This function is a workaround to make USB devices work as well.
- *        See todo.rst for how to fix the issue in the dma-buf framework.
- */
-static struct drm_gem_object *
-ms912x_driver_gem_prime_import(struct drm_device *dev, struct dma_buf *dma_buf)
-{
-	struct ms912x_device *ms912x = to_ms912x(dev);
-
-	if (!ms912x->dmadev)
-		return ERR_PTR(-ENODEV);
-
-	return drm_gem_prime_import_dev(dev, dma_buf, ms912x->dmadev);
-}
 
 DEFINE_DRM_GEM_FOPS(ms912x_driver_fops);
 
@@ -59,11 +44,10 @@ static const struct drm_driver driver = {
 	/* GEM hooks */
 	.fops = &ms912x_driver_fops,
 	DRM_GEM_SHMEM_DRIVER_OPS,
-	.gem_prime_import = ms912x_driver_gem_prime_import,
+	DRM_FBDEV_SHMEM_DRIVER_OPS,
 
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
-	.date = DRIVER_DATE,
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
@@ -213,6 +197,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	int ret;
 	struct ms912x_device *ms912x;
 	struct drm_device *dev;
+	struct device *dma_dev;
 
 	ms912x = devm_drm_dev_alloc(&interface->dev, &driver,
 				    struct ms912x_device, drm);
@@ -222,14 +207,18 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ms912x->intf = interface;
 	dev = &ms912x->drm;
 
-	ms912x->dmadev = usb_intf_get_dma_device(interface);
-	if (!ms912x->dmadev)
+	dma_dev = usb_intf_get_dma_device(interface);
+	if (dma_dev) {
+		drm_dev_set_dma_dev(dev, dma_dev);
+		put_device(dma_dev);
+	} else {
 		drm_warn(dev,
 			 "buffer sharing not supported"); /* not an error */
-
+	}
 	ret = drmm_mode_config_init(dev);
+
 	if (ret)
-		goto err_put_device;
+		return ret;
 
 	dev->mode_config.min_width = 0;
 	dev->mode_config.max_width = 2048;
@@ -243,7 +232,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	ret = ms912x_init_request(ms912x, &ms912x->requests[0],
 				  2048 * 2048 * 2);
 	if (ret)
-		goto err_put_device;
+		return ret;
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[1],
 				  2048 * 2048 * 2);
@@ -275,7 +264,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		goto err_free_request_1;
 
-	drm_fbdev_ttm_setup(dev, 0);
+	drm_client_setup(dev, NULL);
 
 	return 0;
 
@@ -283,8 +272,6 @@ err_free_request_1:
 	ms912x_free_request(&ms912x->requests[1]);
 err_free_request_0:
 	ms912x_free_request(&ms912x->requests[0]);
-err_put_device:
-	put_device(ms912x->dmadev);
 	return ret;
 }
 
@@ -300,8 +287,6 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	drm_atomic_helper_shutdown(dev);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
-	put_device(ms912x->dmadev);
-	ms912x->dmadev = NULL;
 }
 
 static const struct usb_device_id id_table[] = {
@@ -324,4 +309,5 @@ static struct usb_driver ms912x_driver = {
 	.id_table = id_table,
 };
 module_usb_driver(ms912x_driver);
+MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL");
