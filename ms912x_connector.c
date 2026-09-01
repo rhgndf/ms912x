@@ -28,21 +28,17 @@ static int ms912x_read_edid(void *data, u8 *buf, unsigned int block, size_t len)
 
 static int ms912x_connector_get_modes(struct drm_connector *connector)
 {
-	int ret;
 	struct ms912x_device *ms912x = to_ms912x(connector->dev);
-	const struct drm_edid *edid;
+	struct edid *edid;
+	int ret;
 
-	edid = drm_edid_read_custom(connector, ms912x_read_edid, ms912x);
+	edid = drm_do_get_edid(connector, ms912x_read_edid, ms912x);
 	if (!edid)
 		return 0;
-	ret = drm_edid_connector_update(connector, edid);
-	if (ret < 0) {
-		ret = 0;
-		goto edid_free;
-	}
-	ret = drm_edid_connector_add_modes(connector);
-edid_free:
-	drm_edid_free(edid);
+
+	drm_connector_update_edid_property(connector, edid);
+	ret = drm_add_edid_modes(connector, edid);
+	kfree(edid);
 	return ret;
 }
 
