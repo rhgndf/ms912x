@@ -1,52 +1,54 @@
+// SPDX-License-Identifier: GPL-2.0-only
 
-#include <uapi/linux/hid.h>
+#include <linux/hid.h>
 
 #include "ms912x.h"
 
 int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 {
+	struct ms912x_request request;
+	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
 	int ret;
-	struct usb_interface *intf = ms912x->intf;
-	struct usb_device *usb_dev = interface_to_usbdev(intf);
-	struct ms912x_request *request = kzalloc(8, GFP_KERNEL);
 
-	request->type = 0xb5;
-	request->addr = cpu_to_be16(address);
-	usb_control_msg(usb_dev, usb_sndctrlpipe(usb_dev, 0),
-			HID_REQ_SET_REPORT,
-			USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-			0x0300, 0, request, 8, USB_CTRL_SET_TIMEOUT);
-	ret = usb_control_msg(usb_dev, usb_rcvctrlpipe(usb_dev, 0),
-			      HID_REQ_GET_REPORT,
-			      USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-			      0x0300, 0, request, 8, USB_CTRL_GET_TIMEOUT);
+	memset(&request, 0, sizeof(request));
+	request.type = 0xb5;
+	request.addr = cpu_to_be16(address);
 
-	if (ret > 0)
-		ret = request->data[0];
-	else if (ret == 0)
-		ret = -EIO;
-	kfree(request);
-	return ret;
+	ret = usb_control_msg_send(
+		usb_dev, 0, HID_REQ_SET_REPORT,
+		USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+		0x0300, 0, &request, sizeof(request), USB_CTRL_SET_TIMEOUT,
+		GFP_KERNEL);
+	if (ret)
+		return ret;
+
+	ret = usb_control_msg_recv(
+		usb_dev, 0, HID_REQ_GET_REPORT,
+		USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+		0x0300, 0, &request, sizeof(request), USB_CTRL_GET_TIMEOUT,
+		GFP_KERNEL);
+	if (ret)
+		return ret;
+
+	return request.data[0];
 }
 
 static inline int ms912x_write_6_bytes(struct ms912x_device *ms912x,
-				       u16 address, void *data)
+				       u16 address, const void *data)
 {
-	int ret;
-	struct usb_interface *intf = ms912x->intf;
-	struct usb_device *usb_dev = interface_to_usbdev(intf);
-	struct ms912x_write_request *request = kzalloc(8, GFP_KERNEL);
+	struct ms912x_write_request request;
+	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
 
-	request->type = 0xa6;
-	request->addr = address;
-	memcpy(request->data, data, 6);
+	request.type = 0xa6;
+	request.addr = address;
 
-	ret = usb_control_msg(
-		usb_dev, usb_sndctrlpipe(usb_dev, 0), HID_REQ_SET_REPORT,
-		USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE, 0x0300, 0,
-		request, 8, USB_CTRL_SET_TIMEOUT);
-	kfree(request);
-	return ret;
+	memcpy(request.data, data, sizeof(request.data));
+
+	return usb_control_msg_send(
+		usb_dev, 0, HID_REQ_SET_REPORT,
+		USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+		0x0300, 0, &request, sizeof(request), USB_CTRL_SET_TIMEOUT,
+		GFP_KERNEL);
 }
 
 int ms912x_power_on(struct ms912x_device *ms912x)

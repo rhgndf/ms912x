@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 
 #ifndef MS912X_H
 #define MS912X_H
@@ -35,6 +36,7 @@ struct ms912x_usb_request {
 struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
+	unsigned int bulk_pipe;
 
 	struct drm_connector connector;
 	struct drm_simple_display_pipe display_pipe;

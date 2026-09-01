@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/dma-buf.h>
 #include <linux/vmalloc.h>
@@ -24,9 +25,9 @@ static void ms912x_request_work(struct work_struct *work)
 	struct sg_table *transfer_sgt = &request->transfer_sgt;
 
 	timer_setup(&request->timer, ms912x_request_timeout, 0);
-	usb_sg_init(sgr, usbdev, usb_sndbulkpipe(usbdev, 0x04), 0,
-		    transfer_sgt->sgl, transfer_sgt->nents,
-		    request->transfer_len, GFP_KERNEL);
+	usb_sg_init(sgr, usbdev, ms912x->bulk_pipe, 0,
+			  transfer_sgt->sgl, transfer_sgt->nents,
+			  request->transfer_len, GFP_KERNEL);
 	mod_timer(&request->timer, jiffies + msecs_to_jiffies(5000));
 	usb_sg_wait(sgr);
 	timer_delete_sync(&request->timer);
@@ -204,7 +205,8 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	current_request = &ms912x->requests[ms912x->current_request];
 	prev_request = &ms912x->requests[1 - ms912x->current_request];
 
-	drm_dev_enter(drm, &idx);
+	if (!drm_dev_enter(drm, &idx))
+		return -ENODEV;
 
 	ret = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
 	if (ret < 0)

@@ -198,6 +198,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	struct ms912x_device *ms912x;
 	struct drm_device *dev;
 	struct device *dma_dev;
+	struct usb_endpoint_descriptor *bulk_out;
 
 	ms912x = devm_drm_dev_alloc(&interface->dev, &driver,
 				    struct ms912x_device, drm);
@@ -205,6 +206,13 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return PTR_ERR(ms912x);
 
 	ms912x->intf = interface;
+
+	ret = usb_find_bulk_out_endpoint(interface->cur_altsetting, &bulk_out);
+	if (ret)
+		return ret;
+	ms912x->bulk_pipe =
+		usb_sndbulkpipe(interface_to_usbdev(interface),
+				usb_endpoint_num(bulk_out));
 	dev = &ms912x->drm;
 
 	dma_dev = usb_intf_get_dma_device(interface);
@@ -280,10 +288,10 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	struct ms912x_device *ms912x = usb_get_intfdata(interface);
 	struct drm_device *dev = &ms912x->drm;
 
-	cancel_work_sync(&ms912x->requests[0].work);
-	cancel_work_sync(&ms912x->requests[1].work);
 	drm_kms_helper_poll_fini(dev);
 	drm_dev_unplug(dev);
+	cancel_work_sync(&ms912x->requests[0].work);
+	cancel_work_sync(&ms912x->requests[1].work);
 	drm_atomic_helper_shutdown(dev);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);

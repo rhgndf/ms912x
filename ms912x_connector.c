@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_connector.h>
