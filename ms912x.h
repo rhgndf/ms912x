@@ -41,12 +41,13 @@ struct ms912x_usb_request {
 	struct work_struct work;
 	struct timer_list timer;
 	struct completion done;
-	struct drm_format_conv_state fmtcnv_state;
+	__le32 *line_buffer;
 };
 
 struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
+	struct device *dmadev;
 	unsigned int bulk_pipe;
 
 	struct drm_connector connector;
@@ -123,8 +124,8 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
 
-int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
-			struct drm_rect *rect);
+int ms912x_fb_send_rect(struct drm_framebuffer *fb,
+			const struct dma_buf_map *map, struct drm_rect *rect);
 
 void ms912x_free_request(struct ms912x_usb_request *request);
 int ms912x_init_request(struct ms912x_device *ms912x,
