@@ -4,6 +4,7 @@
 #define MS912X_H
 
 #include <linux/mm_types.h>
+#include <linux/mutex.h>
 #include <linux/scatterlist.h>
 #include <linux/usb.h>
 
@@ -48,6 +49,7 @@ struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
 	unsigned int bulk_pipe;
+	struct mutex ctrl_lock;
 
 	struct drm_connector connector;
 	struct drm_encoder encoder;
@@ -88,11 +90,9 @@ struct ms912x_mode_request {
 } __packed;
 
 struct ms912x_frame_update_header {
-	__be16 header; /* ff 00 */
-	u8 x; /* left in multiple of 16 */
-	__be16 y;
-	u8 width; /* width in multiples of 16 */
-	__be16 height;
+	__be16 marker;
+	u8 position[3]; /* x:y, packed 12-bit big-endian values */
+	u8 dimensions[3]; /* width:height, packed 12-bit big-endian values */
 } __packed;
 
 #define MS912X_FRAME_OVERHEAD 16

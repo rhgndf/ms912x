@@ -59,32 +59,44 @@ static const struct drm_mode_config_funcs ms912x_mode_config_funcs = {
 	.atomic_commit = drm_atomic_helper_commit,
 };
 
-static const struct ms912x_mode ms912x_mode_list[] = {
-	/* Found in captures of the Windows driver */
-	MS912X_MODE(800,  600, 60, 0x4200, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1024,  768, 60, 0x4700, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1152,  864, 60, 0x4c00, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280,  720, 60, 0x4f00, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280,  800, 60, 0x5700, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280,  960, 60, 0x5b00, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280, 1024, 60, 0x6000, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1366,  768, 60, 0x6600, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1400, 1050, 60, 0x6700, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1440,  900, 60, 0x6b00, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1680, 1050, 60, 0x7800, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1920, 1080, 60, 0x8100, MS912X_PIXFMT_UYVY),
+static const struct drm_mode_config_helper_funcs
+ms912x_mode_config_helper_funcs = {
+	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
+};
 
-	/* Dumped from the device */
-	MS912X_MODE(720,  480, 60, 0x0200, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(720,  576, 60, 0x1100, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(640,  480, 60, 0x4000, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1024,  768, 60, 0x4900, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280,  600, 60, 0x4e00, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280,  768, 60, 0x5400, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1280, 1024, 60, 0x6100, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1360,  768, 60, 0x6400, MS912X_PIXFMT_UYVY),
-	MS912X_MODE(1600, 1200, 60, 0x7300, MS912X_PIXFMT_UYVY),
-	/* TODO: more mode numbers? */
+#define MS912X_MAX_WIDTH 1920
+#define MS912X_MAX_HEIGHT 1200
+#define MS912X_MAX_TRANSFER_LEN \
+	(MS912X_MAX_WIDTH * MS912X_MAX_HEIGHT * 2 + MS912X_FRAME_OVERHEAD)
+
+static const struct ms912x_mode ms912x_mode_list[] = {
+	/* Found in captures of the Windows driver and dumped from device */
+	MS912X_MODE( 720,  480, 60, 0x0200, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
+	MS912X_MODE( 720,  576, 50, 0x1100, MS912X_PIXFMT_UYVY), /* 50.00 Hz */
+	MS912X_MODE(1280,  720, 50, 0x1300, MS912X_PIXFMT_UYVY), /* 50.00 Hz */
+	MS912X_MODE(1920, 1080, 50, 0x1f00, MS912X_PIXFMT_UYVY), /* 50.00 Hz */
+	MS912X_MODE(1920, 1080, 30, 0x2200, MS912X_PIXFMT_UYVY), /* 30.00 Hz */
+	MS912X_MODE( 640,  480, 60, 0x4000, MS912X_PIXFMT_UYVY), /* 59.94 Hz */
+	MS912X_MODE( 800,  600, 60, 0x4200, MS912X_PIXFMT_UYVY), /* 60.32 Hz */
+	MS912X_MODE( 800,  600, 75, 0x4400, MS912X_PIXFMT_UYVY), /* 75.00 Hz */
+	MS912X_MODE(1024,  768, 60, 0x4700, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
+	MS912X_MODE(1024,  768, 75, 0x4900, MS912X_PIXFMT_UYVY), /* 75.03 Hz */
+	MS912X_MODE(1152,  864, 60, 0x4c00, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
+	MS912X_MODE(1280,  600, 60, 0x4e00, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
+	MS912X_MODE(1280,  720, 60, 0x4f00, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
+	MS912X_MODE(1280,  768, 60, 0x5400, MS912X_PIXFMT_UYVY), /* 59.87 Hz */
+	MS912X_MODE(1280,  768, 75, 0x5600, MS912X_PIXFMT_UYVY), /* 74.89 Hz */
+	MS912X_MODE(1280,  800, 60, 0x5700, MS912X_PIXFMT_UYVY), /* 59.81 Hz */
+	MS912X_MODE(1280,  960, 60, 0x5b00, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
+	MS912X_MODE(1280, 1024, 60, 0x6000, MS912X_PIXFMT_UYVY), /* 60.02 Hz */
+	MS912X_MODE(1280, 1024, 75, 0x6100, MS912X_PIXFMT_UYVY), /* 75.02 Hz */
+	MS912X_MODE(1360,  768, 60, 0x6400, MS912X_PIXFMT_UYVY), /* 60.02 Hz */
+	MS912X_MODE(1366,  768, 60, 0x6600, MS912X_PIXFMT_UYVY), /* 59.79 Hz */
+	MS912X_MODE(1400, 1050, 60, 0x6700, MS912X_PIXFMT_UYVY), /* 59.98 Hz */
+	MS912X_MODE(1440,  900, 60, 0x6b00, MS912X_PIXFMT_UYVY), /* 59.89 Hz */
+	MS912X_MODE(1600, 1200, 60, 0x7300, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
+	MS912X_MODE(1680, 1050, 60, 0x7800, MS912X_PIXFMT_UYVY), /* 59.95 Hz */
+	MS912X_MODE(1920, 1080, 60, 0x8100, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
 };
 
 static const struct ms912x_mode *
@@ -275,6 +287,9 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return PTR_ERR(ms912x);
 
 	ms912x->intf = interface;
+	ret = devm_mutex_init(&interface->dev, &ms912x->ctrl_lock);
+	if (ret)
+		return ret;
 
 	ret = usb_find_bulk_out_endpoint(interface->cur_altsetting, &bulk_out);
 	if (ret)
@@ -298,10 +313,11 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return ret;
 
 	dev->mode_config.min_width = 0;
-	dev->mode_config.max_width = 2048;
+	dev->mode_config.max_width = MS912X_MAX_WIDTH;
 	dev->mode_config.min_height = 0;
-	dev->mode_config.max_height = 2048;
+	dev->mode_config.max_height = MS912X_MAX_HEIGHT;
 	dev->mode_config.funcs = &ms912x_mode_config_funcs;
+	dev->mode_config.helper_private = &ms912x_mode_config_helper_funcs;
 
 	/* This stops weird behavior in the device */
 	ret = ms912x_set_resolution(ms912x, &ms912x_mode_list[0]);
@@ -309,12 +325,12 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return ret;
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[0],
-				  2048 * 2048 * 2 + MS912X_FRAME_OVERHEAD);
+				  MS912X_MAX_TRANSFER_LEN);
 	if (ret)
 		return ret;
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[1],
-				  2048 * 2048 * 2 + MS912X_FRAME_OVERHEAD);
+				  MS912X_MAX_TRANSFER_LEN);
 	if (ret)
 		goto err_free_request_0;
 	complete(&ms912x->requests[1].done);
@@ -408,6 +424,7 @@ static struct usb_driver ms912x_driver = {
 	.disconnect = ms912x_usb_disconnect,
 	.suspend = ms912x_usb_suspend,
 	.resume = ms912x_usb_resume,
+	.reset_resume = ms912x_usb_resume,
 	.shutdown = ms912x_usb_shutdown,
 	.id_table = id_table,
 };

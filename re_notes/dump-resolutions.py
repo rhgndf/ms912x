@@ -129,6 +129,13 @@ power_on()
 def read16(address):
     return read(address) + (read(address+1) << 8)
 
+def read16be(address):
+    return (read(address) << 8) + read(address + 1)
+
+def refresh_hz100():
+    # This place looks like the pixel clock
+    return read16be(0xc62c)
+
 resolutions = []
 for i in trange(256):
     global width, height, hz, mode, pixfmt
@@ -140,11 +147,12 @@ for i in trange(256):
     power_off()
     power_on()
     set_resolution()
+    sleep(0.1)
 
     data = []
     data.append(read16(0xf384)) # hactive
     data.append(read16(0xf388)) # vactive
-    data.append(read(0xf182)) # hz
+    data.append(refresh_hz100())
 
 
     data.append(read16(0xf398)) # htotal
@@ -160,4 +168,10 @@ for i in trange(256):
 # %%
 for i in range(len(resolutions)):
     if i == 0 or (resolutions[i] != resolutions[i-1]):
-        print(f"MS912X_MODE({resolutions[i][0]:4}, {resolutions[i][1]:4}, {resolutions[i][2]:2}, 0x{(i<<8):04x}, MS912X_PIXFMT_UYVY),")
+        centihz = resolutions[i][2]
+        rounded_hz = (centihz + 50) // 100
+        print(
+            f"MS912X_MODE({resolutions[i][0]:4}, {resolutions[i][1]:4}, "
+            f"{rounded_hz:2}, 0x{(i<<8):04x}, MS912X_PIXFMT_UYVY), "
+            f"/* {centihz / 100:.2f} Hz */"
+        )

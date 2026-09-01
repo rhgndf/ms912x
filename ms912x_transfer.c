@@ -3,6 +3,7 @@
 #include <linux/dma-buf.h>
 #include <linux/vmalloc.h>
 #include <linux/timer.h>
+#include <linux/unaligned.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_gem_framebuffer_helper.h>
@@ -187,6 +188,7 @@ static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 {
 	struct ms912x_frame_update_header *header = dst;
 	struct iosys_map fb_map;
+	u32 position, dimensions;
 	int i, x, y1, y2, width;
 	__le32 *temp_buffer;
 
@@ -201,11 +203,12 @@ static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 	if (!temp_buffer)
 		return -ENOMEM;
 
-	header->header = cpu_to_be16(0xff00);
-	header->x = x / 16;
-	header->y = cpu_to_be16(y1);
-	header->width = width / 16;
-	header->height = cpu_to_be16(drm_rect_height(rect));
+	header->marker = cpu_to_be16(0xff00);
+	position = ((x & 0xfff) << 12) | (y1 & 0xfff);
+	dimensions = ((width & 0xfff) << 12) |
+		     (drm_rect_height(rect) & 0xfff);
+	put_unaligned_be24(position, header->position);
+	put_unaligned_be24(dimensions, header->dimensions);
 	dst += sizeof(*header);
 
 	fb_map = IOSYS_MAP_INIT_OFFSET(src, y1 * fb->pitches[0]);
@@ -229,14 +232,9 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	struct ms912x_usb_request *prev_request, *current_request;
 	int x, width;
 
-	/* Seems like hardware can only update framebuffer
-	 * in multiples of 16 horizontally
-	 */
-	x = ALIGN_DOWN(rect->x1, 16);
-	/* Resolutions that are not a multiple of 16 like 1366*768
-	 * need to be aligned
-	 */
-	width = min(ALIGN(rect->x2, 16), ALIGN_DOWN((int)fb->width, 16)) - x;
+	/* UYVY stores pixels in pairs. Expand damage to a complete pair. */
+	x = ALIGN_DOWN(rect->x1, 2);
+	width = min(ALIGN(rect->x2, 2), (int)fb->width) - x;
 	rect->x1 = x;
 	rect->x2 = x + width;
 	current_request = &ms912x->requests[ms912x->current_request];
