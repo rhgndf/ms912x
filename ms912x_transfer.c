@@ -12,7 +12,7 @@
 
 static void ms912x_request_timeout(struct timer_list *t)
 {
-	struct ms912x_usb_request *request = timer_container_of(request, t, timer);
+	struct ms912x_usb_request *request = from_timer(request, t, timer);
 
 	usb_sg_cancel(&request->sgr);
 }

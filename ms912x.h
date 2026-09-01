@@ -47,6 +47,7 @@ struct ms912x_usb_request {
 struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
+	struct device *dmadev;
 	unsigned int bulk_pipe;
 
 	struct drm_connector connector;
