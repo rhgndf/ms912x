@@ -23,16 +23,16 @@
 static int ms912x_usb_suspend(struct usb_interface *interface,
 			      pm_message_t message)
 {
-	struct drm_device *dev = usb_get_intfdata(interface);
+	struct ms912x_device *ms912x = usb_get_intfdata(interface);
 
-	return drm_mode_config_helper_suspend(dev);
+	return drm_mode_config_helper_suspend(&ms912x->drm);
 }
 
 static int ms912x_usb_resume(struct usb_interface *interface)
 {
-	struct drm_device *dev = usb_get_intfdata(interface);
+	struct ms912x_device *ms912x = usb_get_intfdata(interface);
 
-	return drm_mode_config_helper_resume(dev);
+	return drm_mode_config_helper_resume(&ms912x->drm);
 }
 
 
@@ -101,28 +101,46 @@ ms912x_get_mode(const struct drm_display_mode *mode)
 			return &ms912x_mode_list[i];
 		}
 	}
-	return ERR_PTR(-EINVAL);
+	return NULL;
 }
 
 static void ms912x_pipe_enable(struct drm_simple_display_pipe *pipe,
 			       struct drm_crtc_state *crtc_state,
 			       struct drm_plane_state *plane_state)
 {
-	struct ms912x_device *ms912x = to_ms912x(pipe->crtc.dev);
+	struct drm_device *dev = pipe->crtc.dev;
+	struct ms912x_device *ms912x = to_ms912x(dev);
 	struct drm_display_mode *mode = &crtc_state->mode;
+	const struct ms912x_mode *ms_mode;
+	int ret;
 
-	ms912x_power_on(ms912x);
+	ret = ms912x_power_on(ms912x);
+	if (ret) {
+		drm_err(dev, "failed to power on display: %d\n", ret);
+		return;
+	}
 
 	if (crtc_state->mode_changed) {
-		ms912x_set_resolution(ms912x, ms912x_get_mode(mode));
+		ms_mode = ms912x_get_mode(mode);
+		if (!ms_mode) {
+			drm_err(dev, "unsupported mode passed to pipe enable\n");
+			return;
+		}
+		ret = ms912x_set_resolution(ms912x, ms_mode);
+		if (ret)
+			drm_err(dev, "failed to set display mode: %d\n", ret);
 	}
 }
 
 static void ms912x_pipe_disable(struct drm_simple_display_pipe *pipe)
 {
-	struct ms912x_device *ms912x = to_ms912x(pipe->crtc.dev);
+	struct drm_device *dev = pipe->crtc.dev;
+	struct ms912x_device *ms912x = to_ms912x(dev);
+	int ret;
 
-	ms912x_power_off(ms912x);
+	ret = ms912x_power_off(ms912x);
+	if (ret)
+		drm_err(dev, "failed to power off display: %d\n", ret);
 }
 
 static enum drm_mode_status
@@ -130,7 +148,7 @@ ms912x_pipe_mode_valid(struct drm_simple_display_pipe *pipe,
 		       const struct drm_display_mode *mode)
 {
 	const struct ms912x_mode *ret = ms912x_get_mode(mode);
-	if (IS_ERR(ret)) {
+	if (!ret) {
 		return MODE_BAD;
 	}
 	return MODE_OK;
@@ -235,7 +253,9 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	dev->mode_config.funcs = &ms912x_mode_config_funcs;
 
 	/* This stops weird behavior in the device */
-	ms912x_set_resolution(ms912x, &ms912x_mode_list[0]);
+	ret = ms912x_set_resolution(ms912x, &ms912x_mode_list[0]);
+	if (ret)
+		return ret;
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[0],
 				  2048 * 2048 * 2);
@@ -270,12 +290,14 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	ret = drm_dev_register(dev, 0);
 	if (ret)
-		goto err_free_request_1;
+		goto err_poll_fini;
 
 	drm_client_setup(dev, NULL);
 
 	return 0;
 
+err_poll_fini:
+	drm_kms_helper_poll_fini(dev);
 err_free_request_1:
 	ms912x_free_request(&ms912x->requests[1]);
 err_free_request_0:
@@ -297,6 +319,13 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	ms912x_free_request(&ms912x->requests[1]);
 }
 
+static void ms912x_usb_shutdown(struct usb_interface *interface)
+{
+	struct ms912x_device *ms912x = usb_get_intfdata(interface);
+
+	drm_atomic_helper_shutdown(&ms912x->drm);
+}
+
 static const struct usb_device_id id_table[] = {
 	/* USB 2 */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x534d, 0x6021, 0xff, 0x00, 0x00) },
@@ -309,11 +338,12 @@ static const struct usb_device_id id_table[] = {
 MODULE_DEVICE_TABLE(usb, id_table);
 
 static struct usb_driver ms912x_driver = {
-	.name = "ms912x",
+	.name = DRIVER_NAME,
 	.probe = ms912x_usb_probe,
 	.disconnect = ms912x_usb_disconnect,
 	.suspend = ms912x_usb_suspend,
 	.resume = ms912x_usb_resume,
+	.shutdown = ms912x_usb_shutdown,
 	.id_table = id_table,
 };
 module_usb_driver(ms912x_driver);
