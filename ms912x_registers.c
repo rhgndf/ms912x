@@ -103,14 +103,13 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 	int pixel_format = mode->pix_fmt;
 	int mode_num = mode->mode;
 
-	/* ??? Unknown */
+	/* Sequence obtained from Windows USB captures*/
 	memset(data, 0, sizeof(data));
 	data[0] = 0;
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN2, data);
 	if (ret < 0)
 		return ret;
 
-	/* Device requires these reads before mode programming; values are unused. */
 	ret = ms912x_read_byte(ms912x, 0x30);
 	if (ret < 0)
 		return ret;
@@ -121,7 +120,6 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 	if (ret < 0)
 		return ret;
 
-	/* ??? Unknown */
 	memset(data, 0, sizeof(data));
 	data[0] = 0x03;
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN1, data);
@@ -145,14 +143,12 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 	if (ret < 0)
 		return ret;
 
-	/* ??? Unknown */
 	memset(data, 0, sizeof(data));
 	data[0] = 1;
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN2, data);
 	if (ret < 0)
 		return ret;
 
-	/* ??? Unknown */
 	memset(data, 0, sizeof(data));
 	data[0] = 1;
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_OUTPUT_ENABLE, data);

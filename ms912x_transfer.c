@@ -176,8 +176,8 @@ static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
 	}
 }
 
-static const u8 ms912x_end_of_buffer[8] = { 0xff, 0xc0, 0x00, 0x00,
-					    0x00, 0x00, 0x00, 0x00 };
+static const u8 ms912x_end_of_buffer[] = { 0xff, 0xc0, 0x00, 0x00,
+				    0x00, 0x00, 0x00, 0x00 };
 
 static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 					const struct iosys_map *src,
@@ -264,7 +264,8 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 		goto dev_exit;
 	}
 
-	current_request->transfer_len = width * 2 * drm_rect_height(rect) + 16;
+	current_request->transfer_len =
+		width * 2 * drm_rect_height(rect) + MS912X_FRAME_OVERHEAD;
 	queue_work(system_long_wq, &current_request->work);
 	ms912x->current_request = 1 - ms912x->current_request;
 dev_exit:

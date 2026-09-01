@@ -121,9 +121,6 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 		return;
 	}
 
-	if (!crtc_state->mode_changed)
-		return;
-
 	ms_mode = ms912x_get_mode(&crtc_state->mode);
 	if (!ms_mode) {
 		drm_err(dev, "unsupported mode passed to CRTC enable\n");
@@ -190,6 +187,7 @@ static void ms912x_plane_atomic_update(struct drm_plane *plane,
 {
 	struct drm_plane_state *old_plane_state;
 	struct drm_plane_state *new_plane_state;
+	struct drm_crtc_state *new_crtc_state;
 	struct drm_shadow_plane_state *shadow_plane_state;
 	struct ms912x_device *ms912x = to_ms912x(plane->dev);
 	struct drm_rect current_rect, rect;
@@ -197,12 +195,14 @@ static void ms912x_plane_atomic_update(struct drm_plane *plane,
 	old_plane_state = drm_atomic_get_old_plane_state(state, plane);
 	new_plane_state = drm_atomic_get_new_plane_state(state, plane);
 
-	if (!new_plane_state->crtc || !new_plane_state->fb)
+	if (!new_plane_state->fb)
 		return;
+	new_crtc_state = drm_atomic_get_new_crtc_state(state,
+						       new_plane_state->crtc);
 	shadow_plane_state = to_drm_shadow_plane_state(new_plane_state);
 
 	if (old_plane_state->fb != new_plane_state->fb ||
-	    new_plane_state->crtc->state->mode_changed)
+	    new_crtc_state->mode_changed)
 		drm_rect_init(&ms912x->update_rect, 0, 0, 0, 0);
 
 	if (drm_atomic_helper_damage_merged(old_plane_state, new_plane_state,
@@ -309,12 +309,12 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return ret;
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[0],
-				  2048 * 2048 * 2 + 16);
+				  2048 * 2048 * 2 + MS912X_FRAME_OVERHEAD);
 	if (ret)
 		return ret;
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[1],
-				  2048 * 2048 * 2 + 16);
+				  2048 * 2048 * 2 + MS912X_FRAME_OVERHEAD);
 	if (ret)
 		goto err_free_request_0;
 	complete(&ms912x->requests[1].done);

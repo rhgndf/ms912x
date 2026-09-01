@@ -95,6 +95,8 @@ struct ms912x_frame_update_header {
 	__be16 height;
 } __packed;
 
+#define MS912X_FRAME_OVERHEAD 16
+
 struct ms912x_mode {
 	int width;
 	int height;
@@ -110,8 +112,6 @@ struct ms912x_mode {
 	{                                                                      \
 		.width = w, .height = h, .hz = z, .mode = m, .pix_fmt = f      \
 	}
-
-#define MS912X_MAX_TRANSFER_LENGTH 65536
 
 #define to_ms912x(x) container_of(x, struct ms912x_device, drm)
 
