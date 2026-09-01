@@ -2,53 +2,68 @@
 
 #include <linux/hid.h>
 
+#include <drm/drm_drv.h>
+
 #include "ms912x.h"
 
 int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 {
 	struct ms912x_request request;
-	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
-	int ret;
+	struct usb_device *usb_dev;
+	int idx, ret;
 
+	if (!drm_dev_enter(&ms912x->drm, &idx))
+		return -ENODEV;
+
+	usb_dev = interface_to_usbdev(ms912x->intf);
 	memset(&request, 0, sizeof(request));
 	request.type = 0xb5;
 	request.addr = cpu_to_be16(address);
 
-	ret = usb_control_msg_send(
-		usb_dev, 0, HID_REQ_SET_REPORT,
-		USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-		0x0300, 0, &request, sizeof(request), USB_CTRL_SET_TIMEOUT,
-		GFP_KERNEL);
+	ret = usb_control_msg_send(usb_dev, 0, HID_REQ_SET_REPORT,
+				   USB_DIR_OUT | USB_TYPE_CLASS |
+					   USB_RECIP_INTERFACE,
+				   0x0300, 0, &request, sizeof(request),
+				   USB_CTRL_SET_TIMEOUT, GFP_KERNEL);
 	if (ret)
-		return ret;
+		goto dev_exit;
 
-	ret = usb_control_msg_recv(
-		usb_dev, 0, HID_REQ_GET_REPORT,
-		USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-		0x0300, 0, &request, sizeof(request), USB_CTRL_GET_TIMEOUT,
-		GFP_KERNEL);
-	if (ret)
-		return ret;
+	ret = usb_control_msg_recv(usb_dev, 0, HID_REQ_GET_REPORT,
+				   USB_DIR_IN | USB_TYPE_CLASS |
+					   USB_RECIP_INTERFACE,
+				   0x0300, 0, &request, sizeof(request),
+				   USB_CTRL_GET_TIMEOUT, GFP_KERNEL);
+	if (!ret)
+		ret = request.data[0];
 
-	return request.data[0];
+dev_exit:
+	drm_dev_exit(idx);
+	return ret;
 }
 
 static inline int ms912x_write_6_bytes(struct ms912x_device *ms912x,
-				       u16 address, const void *data)
+				       u8 address, const void *data)
 {
 	struct ms912x_write_request request;
-	struct usb_device *usb_dev = interface_to_usbdev(ms912x->intf);
+	struct usb_device *usb_dev;
+	int idx, ret;
 
+	if (!drm_dev_enter(&ms912x->drm, &idx))
+		return -ENODEV;
+
+	usb_dev = interface_to_usbdev(ms912x->intf);
 	request.type = 0xa6;
 	request.addr = address;
-
 	memcpy(request.data, data, sizeof(request.data));
 
-	return usb_control_msg_send(
-		usb_dev, 0, HID_REQ_SET_REPORT,
-		USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-		0x0300, 0, &request, sizeof(request), USB_CTRL_SET_TIMEOUT,
-		GFP_KERNEL);
+	ret = usb_control_msg_send(usb_dev, 0, HID_REQ_SET_REPORT,
+				   USB_DIR_OUT | USB_TYPE_CLASS |
+					   USB_RECIP_INTERFACE,
+				   0x0300, 0, &request, sizeof(request),
+				   USB_CTRL_SET_TIMEOUT, GFP_KERNEL);
+	drm_dev_exit(idx);
+
+	return ret;
 }
 
 int ms912x_power_on(struct ms912x_device *ms912x)
@@ -74,6 +89,7 @@ int ms912x_power_off(struct ms912x_device *ms912x)
 
 	return ret;
 }
+
 int ms912x_set_resolution(struct ms912x_device *ms912x,
 			  const struct ms912x_mode *mode)
 {
@@ -117,7 +133,7 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 	resolution_request.height = cpu_to_be16(height);
 	resolution_request.pixel_format = cpu_to_be16(pixel_format);
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_RESOLUTION,
-				    &resolution_request);
+				   &resolution_request);
 	if (ret < 0)
 		return ret;
 

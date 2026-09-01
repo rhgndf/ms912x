@@ -59,11 +59,11 @@ complete:
 
 void ms912x_free_request(struct ms912x_usb_request *request)
 {
-	drm_format_conv_state_release(&request->fmtcnv_state);
-
 	if (!request->transfer_buffer)
 		return;
 
+	timer_shutdown_sync(&request->timer);
+	drm_format_conv_state_release(&request->fmtcnv_state);
 	sg_free_table(&request->transfer_sgt);
 	vfree(request->transfer_buffer);
 	request->transfer_buffer = NULL;
@@ -73,8 +73,8 @@ void ms912x_free_request(struct ms912x_usb_request *request)
 int ms912x_init_request(struct ms912x_device *ms912x,
 			struct ms912x_usb_request *request, size_t len)
 {
-	int ret, i;
-	unsigned int num_pages;
+	int ret;
+	unsigned int i, num_pages;
 	void *data;
 	struct page **pages;
 	void *ptr;
@@ -120,6 +120,7 @@ static inline unsigned int ms912x_rgb_to_y(unsigned int r, unsigned int g,
 
 	return luma >> 16;
 }
+
 static inline unsigned int ms912x_rgb_to_u(unsigned int r, unsigned int g,
 					   unsigned int b)
 {
@@ -127,6 +128,7 @@ static inline unsigned int ms912x_rgb_to_u(unsigned int r, unsigned int g,
 
 	return u >> 16;
 }
+
 static inline unsigned int ms912x_rgb_to_v(unsigned int r, unsigned int g,
 					   unsigned int b)
 {
@@ -137,7 +139,7 @@ static inline unsigned int ms912x_rgb_to_v(unsigned int r, unsigned int g,
 
 static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
 				       const struct iosys_map *xrgb_buffer,
-				      size_t offset, size_t width,
+				       size_t offset, size_t width,
 				       __le32 *temp_buffer)
 {
 	unsigned int i, dst_offset = 0;
@@ -177,22 +179,25 @@ static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
 static const u8 ms912x_end_of_buffer[8] = { 0xff, 0xc0, 0x00, 0x00,
 					    0x00, 0x00, 0x00, 0x00 };
 
-static int ms912x_fb_xrgb8888_to_yuv422(
-	void *dst, const struct iosys_map *src, struct drm_framebuffer *fb,
-	const struct drm_rect *rect, struct drm_format_conv_state *fmtcnv_state)
+static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
+					const struct iosys_map *src,
+					struct drm_framebuffer *fb,
+					const struct drm_rect *rect,
+					struct drm_format_conv_state *fmtcnv_state)
 {
 	struct ms912x_frame_update_header *header = dst;
 	struct iosys_map fb_map;
 	int i, x, y1, y2, width;
-	void *temp_buffer;
+	__le32 *temp_buffer;
 
 	y1 = rect->y1;
 	y2 = min_t(unsigned int, rect->y2, fb->height);
 	x = rect->x1;
 	width = drm_rect_width(rect);
 
-	temp_buffer = drm_format_conv_state_reserve(
-		fmtcnv_state, width * sizeof(*temp_buffer), GFP_KERNEL);
+	temp_buffer = drm_format_conv_state_reserve(fmtcnv_state,
+						    width * sizeof(*temp_buffer),
+						    GFP_KERNEL);
 	if (!temp_buffer)
 		return -ENOMEM;
 
@@ -255,7 +260,6 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	/* Sending frames too fast, drop it */
 	if (!wait_for_completion_timeout(&prev_request->done,
 					 msecs_to_jiffies(10))) {
-
 		ret = -ETIMEDOUT;
 		goto dev_exit;
 	}

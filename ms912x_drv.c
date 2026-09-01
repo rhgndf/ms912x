@@ -36,7 +36,6 @@ static int ms912x_usb_resume(struct usb_interface *interface)
 	return drm_mode_config_helper_resume(&ms912x->drm);
 }
 
-
 DEFINE_DRM_GEM_FOPS(ms912x_driver_fops);
 
 static const struct drm_driver driver = {
@@ -62,7 +61,7 @@ static const struct drm_mode_config_funcs ms912x_mode_config_funcs = {
 
 static const struct ms912x_mode ms912x_mode_list[] = {
 	/* Found in captures of the Windows driver */
-	MS912X_MODE( 800,  600, 60, 0x4200, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(800,  600, 60, 0x4200, MS912X_PIXFMT_UYVY),
 	MS912X_MODE(1024,  768, 60, 0x4700, MS912X_PIXFMT_UYVY),
 	MS912X_MODE(1152,  864, 60, 0x4c00, MS912X_PIXFMT_UYVY),
 	MS912X_MODE(1280,  720, 60, 0x4f00, MS912X_PIXFMT_UYVY),
@@ -76,9 +75,9 @@ static const struct ms912x_mode ms912x_mode_list[] = {
 	MS912X_MODE(1920, 1080, 60, 0x8100, MS912X_PIXFMT_UYVY),
 
 	/* Dumped from the device */
-	MS912X_MODE( 720,  480, 60, 0x0200, MS912X_PIXFMT_UYVY),
-	MS912X_MODE( 720,  576, 60, 0x1100, MS912X_PIXFMT_UYVY),
-	MS912X_MODE( 640,  480, 60, 0x4000, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(720,  480, 60, 0x0200, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(720,  576, 60, 0x1100, MS912X_PIXFMT_UYVY),
+	MS912X_MODE(640,  480, 60, 0x4000, MS912X_PIXFMT_UYVY),
 	MS912X_MODE(1024,  768, 60, 0x4900, MS912X_PIXFMT_UYVY),
 	MS912X_MODE(1280,  600, 60, 0x4e00, MS912X_PIXFMT_UYVY),
 	MS912X_MODE(1280,  768, 60, 0x5400, MS912X_PIXFMT_UYVY),
@@ -91,7 +90,7 @@ static const struct ms912x_mode ms912x_mode_list[] = {
 static const struct ms912x_mode *
 ms912x_get_mode(const struct drm_display_mode *mode)
 {
-	int i;
+	unsigned int i;
 	int width = mode->hdisplay;
 	int height = mode->vdisplay;
 	int hz = drm_mode_vrefresh(mode);
@@ -109,11 +108,11 @@ ms912x_get_mode(const struct drm_display_mode *mode)
 static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 				      struct drm_atomic_state *state)
 {
+	struct drm_crtc_state *crtc_state =
+		drm_atomic_get_new_crtc_state(state, crtc);
 	struct drm_device *dev = crtc->dev;
 	struct ms912x_device *ms912x = to_ms912x(dev);
-	struct drm_crtc_state *crtc_state = crtc->state;
 	const struct ms912x_mode *ms_mode;
-	int power_off_ret;
 	int ret;
 
 	ret = ms912x_power_on(ms912x);
@@ -122,26 +121,15 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 		return;
 	}
 
-	if (!crtc_state->mode_changed)
-		return;
-
 	ms_mode = ms912x_get_mode(&crtc_state->mode);
 	if (!ms_mode) {
 		drm_err(dev, "unsupported mode passed to CRTC enable\n");
-		goto err_power_off;
+		return;
 	}
 
 	ret = ms912x_set_resolution(ms912x, ms_mode);
-	if (!ret)
-		return;
-
-	drm_err(dev, "failed to set display mode: %d\n", ret);
-
-err_power_off:
-	power_off_ret = ms912x_power_off(ms912x);
-	if (power_off_ret)
-		drm_err(dev, "failed to power off display: %d\n",
-			power_off_ret);
+	if (ret)
+		drm_err(dev, "failed to set display mode: %d\n", ret);
 }
 
 static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
@@ -160,9 +148,9 @@ static enum drm_mode_status
 ms912x_crtc_mode_valid(struct drm_crtc *crtc,
 		       const struct drm_display_mode *mode)
 {
-	const struct ms912x_mode *ret = ms912x_get_mode(mode);
+	const struct ms912x_mode *ms_mode = ms912x_get_mode(mode);
 
-	if (!ret)
+	if (!ms_mode)
 		return MODE_BAD;
 
 	return MODE_OK;
@@ -262,7 +250,7 @@ static const struct drm_plane_funcs ms912x_plane_funcs = {
 	DRM_GEM_SHADOW_PLANE_FUNCS,
 };
 
-static const uint32_t ms912x_plane_formats[] = {
+static const u32 ms912x_plane_formats[] = {
 	DRM_FORMAT_XRGB8888,
 };
 
@@ -343,11 +331,11 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	drm_crtc_helper_add(&ms912x->crtc, &ms912x_crtc_helper_funcs);
 
-	ms912x->encoder.possible_crtcs = drm_crtc_mask(&ms912x->crtc);
 	ret = drm_encoder_init(dev, &ms912x->encoder, &ms912x_encoder_funcs,
-			       DRM_MODE_ENCODER_NONE, NULL);
+			       DRM_MODE_ENCODER_TMDS, NULL);
 	if (ret)
 		goto err_free_request_1;
+	ms912x->encoder.possible_crtcs = drm_crtc_mask(&ms912x->crtc);
 
 	ret = ms912x_connector_init(ms912x);
 	if (ret)
@@ -383,9 +371,9 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 
 	drm_kms_helper_poll_fini(dev);
 	drm_dev_unplug(dev);
+	drm_atomic_helper_shutdown(dev);
 	cancel_work_sync(&ms912x->requests[0].work);
 	cancel_work_sync(&ms912x->requests[1].work);
-	drm_atomic_helper_shutdown(dev);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
 }

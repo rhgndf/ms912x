@@ -58,6 +58,7 @@ static enum drm_connector_status ms912x_detect(struct drm_connector *connector,
 	return status == 1 ? connector_status_connected :
 			     connector_status_disconnected;
 }
+
 static const struct drm_connector_helper_funcs ms912x_connector_helper_funcs = {
 	.get_modes = ms912x_connector_get_modes,
 };
