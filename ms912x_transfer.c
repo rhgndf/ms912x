@@ -6,13 +6,14 @@
 
 #include <drm/drm_drv.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_print.h>
 
 #include "ms912x.h"
 
 static void ms912x_request_timeout(struct timer_list *t)
 {
-	struct ms912x_usb_request *request = timer_container_of(request, t, timer);
+	struct ms912x_usb_request *request = from_timer(request, t, timer);
 
 	usb_sg_cancel(&request->sgr);
 }
@@ -41,7 +42,7 @@ static void ms912x_request_work(struct work_struct *work)
 	mod_timer(&request->timer, jiffies + msecs_to_jiffies(5000));
 	usb_sg_wait(sgr);
 
-	if (!timer_delete_sync(&request->timer))
+	if (!del_timer_sync(&request->timer))
 		ret = -ETIMEDOUT;
 	else if (sgr->status < 0)
 		ret = sgr->status;
@@ -62,11 +63,12 @@ void ms912x_free_request(struct ms912x_usb_request *request)
 	if (!request->transfer_buffer)
 		return;
 
-	timer_shutdown_sync(&request->timer);
-	drm_format_conv_state_release(&request->fmtcnv_state);
+	del_timer_sync(&request->timer);
+	kvfree(request->line_buffer);
 	sg_free_table(&request->transfer_sgt);
 	vfree(request->transfer_buffer);
 	request->transfer_buffer = NULL;
+	request->line_buffer = NULL;
 	request->alloc_len = 0;
 }
 
@@ -78,6 +80,7 @@ int ms912x_init_request(struct ms912x_device *ms912x,
 	void *data;
 	struct page **pages;
 	void *ptr;
+	__le32 *line_buffer;
 
 	data = vmalloc_32(len);
 	if (!data)
@@ -98,16 +101,23 @@ int ms912x_init_request(struct ms912x_device *ms912x,
 	if (ret)
 		goto err_vfree;
 
+	line_buffer = kvmalloc_array(2048, sizeof(*line_buffer), GFP_KERNEL);
+	if (!line_buffer) {
+		ret = -ENOMEM;
+		goto err_sg_free;
+	}
+
 	request->alloc_len = len;
 	request->transfer_buffer = data;
+	request->line_buffer = line_buffer;
 	request->ms912x = ms912x;
-
-	drm_format_conv_state_init(&request->fmtcnv_state);
 	init_completion(&request->done);
 	timer_setup(&request->timer, ms912x_request_timeout, 0);
 	INIT_WORK(&request->work, ms912x_request_work);
 	return 0;
 
+err_sg_free:
+	sg_free_table(&request->transfer_sgt);
 err_vfree:
 	vfree(data);
 	return ret;
@@ -138,16 +148,15 @@ static inline unsigned int ms912x_rgb_to_v(unsigned int r, unsigned int g,
 }
 
 static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
-				       const struct iosys_map *xrgb_buffer,
-				       size_t offset, size_t width,
-				       __le32 *temp_buffer)
+				       const void *xrgb_buffer, size_t offset,
+				       size_t width, __le32 *temp_buffer)
 {
 	unsigned int i, dst_offset = 0;
 	unsigned int pixel1, pixel2;
 	unsigned int r1, g1, b1, r2, g2, b2;
 	unsigned int v, y1, u, y2;
 
-	iosys_map_memcpy_from(temp_buffer, xrgb_buffer, offset, width * 4);
+	memcpy(temp_buffer, (const u8 *)xrgb_buffer + offset, width * 4);
 	for (i = 0; i < width; i += 2) {
 		pixel1 = le32_to_cpup(&temp_buffer[i]);
 		pixel2 = le32_to_cpup(&temp_buffer[i + 1]);
@@ -179,27 +188,18 @@ static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
 static const u8 ms912x_end_of_buffer[] = { 0xff, 0xc0, 0x00, 0x00,
 				    0x00, 0x00, 0x00, 0x00 };
 
-static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
-					const struct iosys_map *src,
-					struct drm_framebuffer *fb,
-					const struct drm_rect *rect,
-					struct drm_format_conv_state *fmtcnv_state)
+static void ms912x_fb_xrgb8888_to_yuv422(void *dst, const void *src,
+					 struct drm_framebuffer *fb,
+					 const struct drm_rect *rect,
+					 __le32 *temp_buffer)
 {
 	struct ms912x_frame_update_header *header = dst;
-	struct iosys_map fb_map;
 	int i, x, y1, y2, width;
-	__le32 *temp_buffer;
 
 	y1 = rect->y1;
 	y2 = min_t(unsigned int, rect->y2, fb->height);
 	x = rect->x1;
 	width = drm_rect_width(rect);
-
-	temp_buffer = drm_format_conv_state_reserve(fmtcnv_state,
-						    width * sizeof(*temp_buffer),
-						    GFP_KERNEL);
-	if (!temp_buffer)
-		return -ENOMEM;
 
 	header->header = cpu_to_be16(0xff00);
 	header->x = x / 16;
@@ -208,25 +208,24 @@ static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 	header->height = cpu_to_be16(drm_rect_height(rect));
 	dst += sizeof(*header);
 
-	fb_map = IOSYS_MAP_INIT_OFFSET(src, y1 * fb->pitches[0]);
 	for (i = y1; i < y2; i++) {
-		ms912x_xrgb_to_yuv422_line(dst, &fb_map, x * 4, width,
+		ms912x_xrgb_to_yuv422_line(dst, src,
+					   i * fb->pitches[0] + x * 4, width,
 					   temp_buffer);
-		iosys_map_incr(&fb_map, fb->pitches[0]);
 		dst += width * 2;
 	}
 
 	memcpy(dst, ms912x_end_of_buffer, sizeof(ms912x_end_of_buffer));
-	return 0;
 }
 
-int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
-			struct drm_rect *rect)
+int ms912x_fb_send_rect(struct drm_framebuffer *fb, struct drm_rect *rect)
 {
-	int ret = 0, idx;
+	struct dma_buf_attachment *import_attach = fb->obj[0]->import_attach;
 	struct ms912x_device *ms912x = to_ms912x(fb->dev);
 	struct drm_device *drm = &ms912x->drm;
 	struct ms912x_usb_request *prev_request, *current_request;
+	void *vaddr;
+	int end_ret, ret = 0, idx;
 	int x, width;
 
 	/* Seems like hardware can only update framebuffer
@@ -245,16 +244,32 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	if (!drm_dev_enter(drm, &idx))
 		return -ENODEV;
 
-	ret = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
-	if (ret < 0)
-		goto dev_exit;
+	if (import_attach) {
+		ret = dma_buf_begin_cpu_access(import_attach->dmabuf,
+					       DMA_FROM_DEVICE);
+		if (ret)
+			goto dev_exit;
+	}
 
-	ret = ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer,
-					   map, fb, rect,
-					   &current_request->fmtcnv_state);
+	vaddr = drm_gem_shmem_vmap(fb->obj[0]);
+	if (IS_ERR(vaddr)) {
+		ret = PTR_ERR(vaddr);
+		goto end_cpu_access;
+	}
 
-	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
-	if (ret < 0)
+	ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer, vaddr,
+					 fb, rect,
+					 current_request->line_buffer);
+
+	drm_gem_shmem_vunmap(fb->obj[0], vaddr);
+end_cpu_access:
+	if (import_attach) {
+		end_ret = dma_buf_end_cpu_access(import_attach->dmabuf,
+						 DMA_FROM_DEVICE);
+		if (!ret)
+			ret = end_ret;
+	}
+	if (ret)
 		goto dev_exit;
 
 	/* Sending frames too fast, drop it */
