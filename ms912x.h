@@ -109,6 +109,7 @@ struct ms912x_custom_mode {
 struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
+	struct device *dmadev;
 	unsigned int bulk_pipe;
 	enum ms912x_video_port port_type;
 	struct workqueue_struct *workqueue;
