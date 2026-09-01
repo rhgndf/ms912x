@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/dma-buf.h>
+#include <linux/iosys-map.h>
 #include <linux/vmalloc.h>
 #include <linux/timer.h>
 
@@ -12,7 +13,7 @@
 
 static void ms912x_request_timeout(struct timer_list *t)
 {
-	struct ms912x_usb_request *request = timer_container_of(request, t, timer);
+	struct ms912x_usb_request *request = from_timer(request, t, timer);
 
 	usb_sg_cancel(&request->sgr);
 }
@@ -41,7 +42,7 @@ static void ms912x_request_work(struct work_struct *work)
 	mod_timer(&request->timer, jiffies + msecs_to_jiffies(5000));
 	usb_sg_wait(sgr);
 
-	if (!timer_delete_sync(&request->timer))
+	if (!del_timer_sync(&request->timer))
 		ret = -ETIMEDOUT;
 	else if (sgr->status < 0)
 		ret = sgr->status;
@@ -62,11 +63,12 @@ void ms912x_free_request(struct ms912x_usb_request *request)
 	if (!request->transfer_buffer)
 		return;
 
-	timer_shutdown_sync(&request->timer);
-	drm_format_conv_state_release(&request->fmtcnv_state);
+	del_timer_sync(&request->timer);
+	kvfree(request->line_buffer);
 	sg_free_table(&request->transfer_sgt);
 	vfree(request->transfer_buffer);
 	request->transfer_buffer = NULL;
+	request->line_buffer = NULL;
 	request->alloc_len = 0;
 }
 
@@ -78,6 +80,7 @@ int ms912x_init_request(struct ms912x_device *ms912x,
 	void *data;
 	struct page **pages;
 	void *ptr;
+	__le32 *line_buffer;
 
 	data = vmalloc_32(len);
 	if (!data)
@@ -98,16 +101,23 @@ int ms912x_init_request(struct ms912x_device *ms912x,
 	if (ret)
 		goto err_vfree;
 
+	line_buffer = kvmalloc_array(2048, sizeof(*line_buffer), GFP_KERNEL);
+	if (!line_buffer) {
+		ret = -ENOMEM;
+		goto err_sg_free;
+	}
+
 	request->alloc_len = len;
 	request->transfer_buffer = data;
+	request->line_buffer = line_buffer;
 	request->ms912x = ms912x;
-
-	drm_format_conv_state_init(&request->fmtcnv_state);
 	init_completion(&request->done);
 	timer_setup(&request->timer, ms912x_request_timeout, 0);
 	INIT_WORK(&request->work, ms912x_request_work);
 	return 0;
 
+err_sg_free:
+	sg_free_table(&request->transfer_sgt);
 err_vfree:
 	vfree(data);
 	return ret;
@@ -179,27 +189,21 @@ static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
 static const u8 ms912x_end_of_buffer[] = { 0xff, 0xc0, 0x00, 0x00,
 				    0x00, 0x00, 0x00, 0x00 };
 
-static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
-					const struct iosys_map *src,
-					struct drm_framebuffer *fb,
-					const struct drm_rect *rect,
-					struct drm_format_conv_state *fmtcnv_state)
+static void ms912x_fb_xrgb8888_to_yuv422(void *dst,
+					 const struct iosys_map *src,
+					 struct drm_framebuffer *fb,
+					 const struct drm_rect *rect,
+					 __le32 *temp_buffer)
 {
 	struct ms912x_frame_update_header *header = dst;
-	struct iosys_map fb_map;
+	struct iosys_map fb_map =
+		IOSYS_MAP_INIT_OFFSET(src, rect->y1 * fb->pitches[0]);
 	int i, x, y1, y2, width;
-	__le32 *temp_buffer;
 
 	y1 = rect->y1;
 	y2 = min_t(unsigned int, rect->y2, fb->height);
 	x = rect->x1;
 	width = drm_rect_width(rect);
-
-	temp_buffer = drm_format_conv_state_reserve(fmtcnv_state,
-						    width * sizeof(*temp_buffer),
-						    GFP_KERNEL);
-	if (!temp_buffer)
-		return -ENOMEM;
 
 	header->header = cpu_to_be16(0xff00);
 	header->x = x / 16;
@@ -208,7 +212,6 @@ static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 	header->height = cpu_to_be16(drm_rect_height(rect));
 	dst += sizeof(*header);
 
-	fb_map = IOSYS_MAP_INIT_OFFSET(src, y1 * fb->pitches[0]);
 	for (i = y1; i < y2; i++) {
 		ms912x_xrgb_to_yuv422_line(dst, &fb_map, x * 4, width,
 					   temp_buffer);
@@ -217,11 +220,10 @@ static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 	}
 
 	memcpy(dst, ms912x_end_of_buffer, sizeof(ms912x_end_of_buffer));
-	return 0;
 }
 
-int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
-			struct drm_rect *rect)
+int ms912x_fb_send_rect(struct drm_framebuffer *fb,
+			const struct iosys_map *map, struct drm_rect *rect)
 {
 	int ret = 0, idx;
 	struct ms912x_device *ms912x = to_ms912x(fb->dev);
@@ -249,9 +251,8 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	if (ret < 0)
 		goto dev_exit;
 
-	ret = ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer,
-					   map, fb, rect,
-					   &current_request->fmtcnv_state);
+	ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer, map, fb,
+					 rect, current_request->line_buffer);
 
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 	if (ret < 0)
