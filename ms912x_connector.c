@@ -17,6 +17,7 @@ static int ms912x_read_edid(void *data, u8 *buf, unsigned int block, size_t len)
 
 	for (i = 0; i < len; i++) {
 		u16 address = 0xc000 + offset + i;
+
 		ret = ms912x_read_byte(ms912x, address);
 		if (ret < 0)
 			return ret;
@@ -30,6 +31,7 @@ static int ms912x_connector_get_modes(struct drm_connector *connector)
 	int ret;
 	struct ms912x_device *ms912x = to_ms912x(connector->dev);
 	const struct drm_edid *edid;
+
 	edid = drm_edid_read_custom(connector, ms912x_read_edid, ms912x);
 	if (!edid)
 		return 0;

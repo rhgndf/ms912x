@@ -95,6 +95,7 @@ ms912x_get_mode(const struct drm_display_mode *mode)
 	int width = mode->hdisplay;
 	int height = mode->vdisplay;
 	int hz = drm_mode_vrefresh(mode);
+
 	for (i = 0; i < ARRAY_SIZE(ms912x_mode_list); i++) {
 		if (ms912x_mode_list[i].width == width &&
 		    ms912x_mode_list[i].height == height &&
@@ -112,6 +113,7 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	struct ms912x_device *ms912x = to_ms912x(dev);
 	struct drm_crtc_state *crtc_state = crtc->state;
 	const struct ms912x_mode *ms_mode;
+	int power_off_ret;
 	int ret;
 
 	ret = ms912x_power_on(ms912x);
@@ -120,16 +122,26 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 		return;
 	}
 
-	if (crtc_state->mode_changed) {
-		ms_mode = ms912x_get_mode(&crtc_state->mode);
-		if (!ms_mode) {
-			drm_err(dev, "unsupported mode passed to CRTC enable\n");
-			return;
-		}
-		ret = ms912x_set_resolution(ms912x, ms_mode);
-		if (ret)
-			drm_err(dev, "failed to set display mode: %d\n", ret);
+	if (!crtc_state->mode_changed)
+		return;
+
+	ms_mode = ms912x_get_mode(&crtc_state->mode);
+	if (!ms_mode) {
+		drm_err(dev, "unsupported mode passed to CRTC enable\n");
+		goto err_power_off;
 	}
+
+	ret = ms912x_set_resolution(ms912x, ms_mode);
+	if (!ret)
+		return;
+
+	drm_err(dev, "failed to set display mode: %d\n", ret);
+
+err_power_off:
+	power_off_ret = ms912x_power_off(ms912x);
+	if (power_off_ret)
+		drm_err(dev, "failed to power off display: %d\n",
+			power_off_ret);
 }
 
 static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
@@ -149,6 +161,7 @@ ms912x_crtc_mode_valid(struct drm_crtc *crtc,
 		       const struct drm_display_mode *mode)
 {
 	const struct ms912x_mode *ret = ms912x_get_mode(mode);
+
 	if (!ret)
 		return MODE_BAD;
 
@@ -187,19 +200,23 @@ static void ms912x_plane_atomic_update(struct drm_plane *plane,
 	struct drm_plane_state *old_plane_state;
 	struct drm_plane_state *new_plane_state;
 	struct drm_shadow_plane_state *shadow_plane_state;
-	struct ms912x_device *ms912x;
+	struct ms912x_device *ms912x = to_ms912x(plane->dev);
 	struct drm_rect current_rect, rect;
 
 	old_plane_state = drm_atomic_get_old_plane_state(state, plane);
 	new_plane_state = drm_atomic_get_new_plane_state(state, plane);
 	shadow_plane_state = to_drm_shadow_plane_state(new_plane_state);
 
+	if (old_plane_state->fb != new_plane_state->fb ||
+	    new_plane_state->crtc->state->mode_changed)
+		drm_rect_init(&ms912x->update_rect, 0, 0, 0, 0);
+
 	if (drm_atomic_helper_damage_merged(old_plane_state, new_plane_state,
 					    &current_rect)) {
-		/* The device double buffers, so we need to send the update
+		/*
+		 * The device double buffers, so we need to send the update
 		 * rects of the last two frames.
 		 */
-		ms912x = to_ms912x(new_plane_state->fb->dev);
 		ms912x_merge_rects(&rect, &current_rect, &ms912x->update_rect);
 		if (ms912x_fb_send_rect(new_plane_state->fb,
 					&shadow_plane_state->data[0], &rect)) {
@@ -298,12 +315,12 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return ret;
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[0],
-				  2048 * 2048 * 2);
+				  2048 * 2048 * 2 + 16);
 	if (ret)
 		return ret;
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[1],
-				  2048 * 2048 * 2);
+				  2048 * 2048 * 2 + 16);
 	if (ret)
 		goto err_free_request_0;
 	complete(&ms912x->requests[1].done);

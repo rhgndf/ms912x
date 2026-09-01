@@ -55,6 +55,7 @@ int ms912x_power_on(struct ms912x_device *ms912x)
 {
 	int ret;
 	u8 data[6];
+
 	memset(data, 0, sizeof(data));
 	data[0] = 0x01;
 	data[1] = 0x02;
@@ -67,6 +68,7 @@ int ms912x_power_off(struct ms912x_device *ms912x)
 {
 	int ret;
 	u8 data[6];
+
 	memset(data, 0, sizeof(data));
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_POWER, data);
 

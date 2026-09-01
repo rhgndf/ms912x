@@ -12,6 +12,7 @@
 #include <drm/drm_device.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_framebuffer.h>
+#include <drm/drm_format_helper.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_rect.h>
@@ -40,6 +41,7 @@ struct ms912x_usb_request {
 	struct work_struct work;
 	struct timer_list timer;
 	struct completion done;
+	struct drm_format_conv_state fmtcnv_state;
 };
 
 struct ms912x_device {
@@ -54,7 +56,7 @@ struct ms912x_device {
 
 	struct drm_rect update_rect;
 
-	/* Double buffer to allow memcpy and transfer 
+	/* Double buffer to allow memcpy and transfer
 	 * to happen in parallel
 	 */
 	int current_request;
@@ -65,25 +67,25 @@ struct ms912x_request {
 	u8 type;
 	__be16 addr;
 	u8 data[5];
-} __attribute__((packed));
+} __packed;
 
 struct ms912x_write_request {
 	u8 type;
 	u8 addr;
 	u8 data[6];
-} __attribute__((packed));
+} __packed;
 
 struct ms912x_resolution_request {
 	__be16 width;
 	__be16 height;
 	__be16 pixel_format;
-} __attribute__((packed));
+} __packed;
 
 struct ms912x_mode_request {
 	__be16 mode;
 	__be16 width;
 	__be16 height;
-} __attribute__((packed));
+} __packed;
 
 struct ms912x_frame_update_header {
 	__be16 header; /* ff 00 */
@@ -91,7 +93,7 @@ struct ms912x_frame_update_header {
 	__be16 y;
 	u8 width; /* width in multiples of 16 */
 	__be16 height;
-} __attribute__((packed));
+} __packed;
 
 struct ms912x_mode {
 	int width;
