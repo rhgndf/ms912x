@@ -72,12 +72,18 @@ static const struct drm_connector_funcs ms912x_connector_funcs = {
 int ms912x_connector_init(struct ms912x_device *ms912x)
 {
 	int ret;
+
 	drm_connector_helper_add(&ms912x->connector,
 				 &ms912x_connector_helper_funcs);
 	ret = drm_connector_init(&ms912x->drm, &ms912x->connector,
 				 &ms912x_connector_funcs,
 				 DRM_MODE_CONNECTOR_HDMIA);
+	if (ret)
+		return ret;
+
 	ms912x->connector.polled =
 		DRM_CONNECTOR_POLL_CONNECT | DRM_CONNECTOR_POLL_DISCONNECT;
-	return ret;
+
+	return drm_connector_attach_encoder(&ms912x->connector,
+					    &ms912x->encoder);
 }

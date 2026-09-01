@@ -7,10 +7,14 @@
 #include <linux/scatterlist.h>
 #include <linux/usb.h>
 
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc.h>
 #include <drm/drm_device.h>
+#include <drm/drm_encoder.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem.h>
-#include <drm/drm_simple_kms_helper.h>
+#include <drm/drm_plane.h>
+#include <drm/drm_rect.h>
 
 #define DRIVER_NAME "ms912x"
 #define DRIVER_DESC "MacroSilicon USB to VGA/HDMI"
@@ -25,8 +29,6 @@
 #define MS912X_CMD_UNKNOWN2		0x04
 #define MS912X_CMD_OUTPUT_ENABLE	0x05
 #define MS912X_CMD_POWER		0x07
-
-#define MS912X_TOTAL_URBS 8
 
 struct ms912x_usb_request {
 	void *transfer_buffer;
@@ -46,8 +48,10 @@ struct ms912x_device {
 	unsigned int bulk_pipe;
 
 	struct drm_connector connector;
-	struct drm_simple_display_pipe display_pipe;
-	
+	struct drm_encoder encoder;
+	struct drm_crtc crtc;
+	struct drm_plane plane;
+
 	struct drm_rect update_rect;
 
 	/* Double buffer to allow memcpy and transfer 

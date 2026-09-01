@@ -3,10 +3,12 @@
 #include <linux/module.h>
 
 #include <drm/clients/drm_client_setup.h>
+#include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_encoder.h>
 #include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem_atomic_helper.h>
@@ -16,7 +18,6 @@
 #include <drm/drm_ioctl.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_print.h>
-#include <drm/drm_simple_kms_helper.h>
 
 #include "ms912x.h"
 
@@ -104,13 +105,12 @@ ms912x_get_mode(const struct drm_display_mode *mode)
 	return NULL;
 }
 
-static void ms912x_pipe_enable(struct drm_simple_display_pipe *pipe,
-			       struct drm_crtc_state *crtc_state,
-			       struct drm_plane_state *plane_state)
+static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
+				      struct drm_atomic_state *state)
 {
-	struct drm_device *dev = pipe->crtc.dev;
+	struct drm_device *dev = crtc->dev;
 	struct ms912x_device *ms912x = to_ms912x(dev);
-	struct drm_display_mode *mode = &crtc_state->mode;
+	struct drm_crtc_state *crtc_state = crtc->state;
 	const struct ms912x_mode *ms_mode;
 	int ret;
 
@@ -121,9 +121,9 @@ static void ms912x_pipe_enable(struct drm_simple_display_pipe *pipe,
 	}
 
 	if (crtc_state->mode_changed) {
-		ms_mode = ms912x_get_mode(mode);
+		ms_mode = ms912x_get_mode(&crtc_state->mode);
 		if (!ms_mode) {
-			drm_err(dev, "unsupported mode passed to pipe enable\n");
+			drm_err(dev, "unsupported mode passed to CRTC enable\n");
 			return;
 		}
 		ret = ms912x_set_resolution(ms912x, ms_mode);
@@ -132,9 +132,10 @@ static void ms912x_pipe_enable(struct drm_simple_display_pipe *pipe,
 	}
 }
 
-static void ms912x_pipe_disable(struct drm_simple_display_pipe *pipe)
+static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
+				       struct drm_atomic_state *state)
 {
-	struct drm_device *dev = pipe->crtc.dev;
+	struct drm_device *dev = crtc->dev;
 	struct ms912x_device *ms912x = to_ms912x(dev);
 	int ret;
 
@@ -144,21 +145,31 @@ static void ms912x_pipe_disable(struct drm_simple_display_pipe *pipe)
 }
 
 static enum drm_mode_status
-ms912x_pipe_mode_valid(struct drm_simple_display_pipe *pipe,
+ms912x_crtc_mode_valid(struct drm_crtc *crtc,
 		       const struct drm_display_mode *mode)
 {
 	const struct ms912x_mode *ret = ms912x_get_mode(mode);
-	if (!ret) {
+	if (!ret)
 		return MODE_BAD;
-	}
+
 	return MODE_OK;
 }
 
-static int ms912x_pipe_check(struct drm_simple_display_pipe *pipe,
-		      struct drm_plane_state *new_plane_state,
-		      struct drm_crtc_state *new_crtc_state)
+static int ms912x_plane_atomic_check(struct drm_plane *plane,
+				     struct drm_atomic_state *state)
 {
-	return 0;
+	struct drm_plane_state *new_plane_state;
+	struct drm_crtc_state *crtc_state = NULL;
+
+	new_plane_state = drm_atomic_get_new_plane_state(state, plane);
+	if (new_plane_state->crtc)
+		crtc_state = drm_atomic_get_new_crtc_state(state,
+							   new_plane_state->crtc);
+
+	return drm_atomic_helper_check_plane_state(new_plane_state, crtc_state,
+						   DRM_PLANE_NO_SCALING,
+						   DRM_PLANE_NO_SCALING,
+						   false, false);
 }
 
 static void ms912x_merge_rects(struct drm_rect *dest, struct drm_rect *r1,
@@ -170,23 +181,28 @@ static void ms912x_merge_rects(struct drm_rect *dest, struct drm_rect *r1,
 	dest->y2 = max(r1->y2, r2->y2);
 }
 
-static void ms912x_pipe_update(struct drm_simple_display_pipe *pipe,
-			       struct drm_plane_state *old_state)
+static void ms912x_plane_atomic_update(struct drm_plane *plane,
+				       struct drm_atomic_state *state)
 {
-	struct drm_plane_state *state = pipe->plane.state;
-	struct drm_shadow_plane_state *shadow_plane_state =
-		to_drm_shadow_plane_state(state);
+	struct drm_plane_state *old_plane_state;
+	struct drm_plane_state *new_plane_state;
+	struct drm_shadow_plane_state *shadow_plane_state;
 	struct ms912x_device *ms912x;
 	struct drm_rect current_rect, rect;
 
-	if (drm_atomic_helper_damage_merged(old_state, state, &current_rect)) {
+	old_plane_state = drm_atomic_get_old_plane_state(state, plane);
+	new_plane_state = drm_atomic_get_new_plane_state(state, plane);
+	shadow_plane_state = to_drm_shadow_plane_state(new_plane_state);
+
+	if (drm_atomic_helper_damage_merged(old_plane_state, new_plane_state,
+					    &current_rect)) {
 		/* The device double buffers, so we need to send the update
 		 * rects of the last two frames.
 		 */
-		ms912x = to_ms912x(state->fb->dev);
+		ms912x = to_ms912x(new_plane_state->fb->dev);
 		ms912x_merge_rects(&rect, &current_rect, &ms912x->update_rect);
-		if (ms912x_fb_send_rect(state->fb, &shadow_plane_state->data[0],
-					&rect)) {
+		if (ms912x_fb_send_rect(new_plane_state->fb,
+					&shadow_plane_state->data[0], &rect)) {
 			/* In case of error, merge the rects to update later */
 			ms912x_merge_rects(&ms912x->update_rect,
 					   &ms912x->update_rect, &rect);
@@ -196,16 +212,40 @@ static void ms912x_pipe_update(struct drm_simple_display_pipe *pipe,
 	}
 }
 
-static const struct drm_simple_display_pipe_funcs ms912x_pipe_funcs = {
-	.enable = ms912x_pipe_enable,
-	.disable = ms912x_pipe_disable,
-	.check = ms912x_pipe_check,
-	.mode_valid = ms912x_pipe_mode_valid,
-	.update = ms912x_pipe_update,
-	DRM_GEM_SIMPLE_DISPLAY_PIPE_SHADOW_PLANE_FUNCS,
+static const struct drm_crtc_helper_funcs ms912x_crtc_helper_funcs = {
+	.mode_valid = ms912x_crtc_mode_valid,
+	.atomic_check = drm_crtc_helper_atomic_check,
+	.atomic_enable = ms912x_crtc_atomic_enable,
+	.atomic_disable = ms912x_crtc_atomic_disable,
 };
 
-static const uint32_t ms912x_pipe_formats[] = {
+static const struct drm_crtc_funcs ms912x_crtc_funcs = {
+	.reset = drm_atomic_helper_crtc_reset,
+	.destroy = drm_crtc_cleanup,
+	.set_config = drm_atomic_helper_set_config,
+	.page_flip = drm_atomic_helper_page_flip,
+	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
+};
+
+static const struct drm_encoder_funcs ms912x_encoder_funcs = {
+	.destroy = drm_encoder_cleanup,
+};
+
+static const struct drm_plane_helper_funcs ms912x_plane_helper_funcs = {
+	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
+	.atomic_check = ms912x_plane_atomic_check,
+	.atomic_update = ms912x_plane_atomic_update,
+};
+
+static const struct drm_plane_funcs ms912x_plane_funcs = {
+	.update_plane = drm_atomic_helper_update_plane,
+	.disable_plane = drm_atomic_helper_disable_plane,
+	.destroy = drm_plane_cleanup,
+	DRM_GEM_SHADOW_PLANE_FUNCS,
+};
+
+static const uint32_t ms912x_plane_formats[] = {
 	DRM_FORMAT_XRGB8888,
 };
 
@@ -268,19 +308,33 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		goto err_free_request_0;
 	complete(&ms912x->requests[1].done);
 
+	ret = drm_universal_plane_init(dev, &ms912x->plane, 0,
+				       &ms912x_plane_funcs,
+				       ms912x_plane_formats,
+				       ARRAY_SIZE(ms912x_plane_formats), NULL,
+				       DRM_PLANE_TYPE_PRIMARY, NULL);
+	if (ret)
+		goto err_free_request_1;
+
+	drm_plane_helper_add(&ms912x->plane, &ms912x_plane_helper_funcs);
+	drm_plane_enable_fb_damage_clips(&ms912x->plane);
+
+	ret = drm_crtc_init_with_planes(dev, &ms912x->crtc, &ms912x->plane,
+					NULL, &ms912x_crtc_funcs, NULL);
+	if (ret)
+		goto err_free_request_1;
+
+	drm_crtc_helper_add(&ms912x->crtc, &ms912x_crtc_helper_funcs);
+
+	ms912x->encoder.possible_crtcs = drm_crtc_mask(&ms912x->crtc);
+	ret = drm_encoder_init(dev, &ms912x->encoder, &ms912x_encoder_funcs,
+			       DRM_MODE_ENCODER_NONE, NULL);
+	if (ret)
+		goto err_free_request_1;
+
 	ret = ms912x_connector_init(ms912x);
 	if (ret)
 		goto err_free_request_1;
-
-	ret = drm_simple_display_pipe_init(&ms912x->drm, &ms912x->display_pipe,
-					   &ms912x_pipe_funcs,
-					   ms912x_pipe_formats,
-					   ARRAY_SIZE(ms912x_pipe_formats),
-					   NULL, &ms912x->connector);
-	if (ret)
-		goto err_free_request_1;
-
-	drm_plane_enable_fb_damage_clips(&ms912x->display_pipe.plane);
 
 	drm_mode_config_reset(dev);
 
