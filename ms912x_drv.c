@@ -106,7 +106,7 @@ ms912x_get_mode(const struct drm_display_mode *mode)
 }
 
 static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
-				      struct drm_atomic_state *state)
+				      struct drm_atomic_commit *state)
 {
 	struct drm_crtc_state *crtc_state =
 		drm_atomic_get_new_crtc_state(state, crtc);
@@ -121,6 +121,9 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 		return;
 	}
 
+	if (!crtc_state->mode_changed)
+		return;
+
 	ms_mode = ms912x_get_mode(&crtc_state->mode);
 	if (!ms_mode) {
 		drm_err(dev, "unsupported mode passed to CRTC enable\n");
@@ -133,7 +136,7 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 }
 
 static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
-				       struct drm_atomic_state *state)
+				       struct drm_atomic_commit *state)
 {
 	struct drm_device *dev = crtc->dev;
 	struct ms912x_device *ms912x = to_ms912x(dev);
@@ -157,7 +160,7 @@ ms912x_crtc_mode_valid(struct drm_crtc *crtc,
 }
 
 static int ms912x_plane_atomic_check(struct drm_plane *plane,
-				     struct drm_atomic_state *state)
+				     struct drm_atomic_commit *state)
 {
 	struct drm_plane_state *new_plane_state;
 	struct drm_crtc_state *crtc_state = NULL;
@@ -183,7 +186,7 @@ static void ms912x_merge_rects(struct drm_rect *dest, struct drm_rect *r1,
 }
 
 static void ms912x_plane_atomic_update(struct drm_plane *plane,
-				       struct drm_atomic_state *state)
+				       struct drm_atomic_commit *state)
 {
 	struct drm_plane_state *old_plane_state;
 	struct drm_plane_state *new_plane_state;
@@ -193,6 +196,9 @@ static void ms912x_plane_atomic_update(struct drm_plane *plane,
 
 	old_plane_state = drm_atomic_get_old_plane_state(state, plane);
 	new_plane_state = drm_atomic_get_new_plane_state(state, plane);
+
+	if (!new_plane_state->crtc || !new_plane_state->fb)
+		return;
 	shadow_plane_state = to_drm_shadow_plane_state(new_plane_state);
 
 	if (old_plane_state->fb != new_plane_state->fb ||
