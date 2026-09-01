@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-#include <linux/array_size.h>
+#include <linux/kernel.h>
 
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_connector.h>
@@ -98,7 +98,7 @@ static int ms912x_add_cea_modes(struct drm_connector *connector,
 	unsigned int i;
 	int count = 0;
 
-	drm_edid_connector_update(connector, NULL);
+	drm_connector_update_edid_property(connector, NULL);
 
 	for (i = 0; i < num_vics; i++) {
 		mode = drm_display_mode_from_cea_vic(connector->dev, vics[i]);
@@ -142,7 +142,7 @@ ms912x_add_default_hdmi_vga_modes(struct drm_connector *connector)
 	struct drm_mode_config *mode_config = &connector->dev->mode_config;
 	int count;
 
-	drm_edid_connector_update(connector, NULL);
+	drm_connector_update_edid_property(connector, NULL);
 	count = drm_add_modes_noedid(connector, mode_config->max_width,
 				     mode_config->max_height);
 	if (count)
@@ -175,7 +175,7 @@ static int ms912x_add_custom_mode(struct drm_connector *connector)
 static int ms912x_connector_get_modes(struct drm_connector *connector)
 {
 	struct ms912x_device *ms912x = to_ms912x(connector->dev);
-	const struct drm_edid *edid;
+	struct edid *edid;
 	int ret = ms912x_add_custom_mode(connector);
 
 	if (ms912x->port_type == MS912X_VIDEO_PORT_CVBS ||
@@ -187,13 +187,13 @@ static int ms912x_connector_get_modes(struct drm_connector *connector)
 	if (ms912x->port_type == MS912X_VIDEO_PORT_YPBPR)
 		return ret + ms912x_add_ypbpr_modes(connector);
 
-	edid = drm_edid_read_custom(connector, ms912x_read_edid, ms912x);
+	edid = drm_do_get_edid(connector, ms912x_read_edid, ms912x);
 	if (!edid)
 		return ret + ms912x_add_default_hdmi_vga_modes(connector);
 
-	if (drm_edid_connector_update(connector, edid) >= 0)
-		ret += drm_edid_connector_add_modes(connector);
-	drm_edid_free(edid);
+	drm_connector_update_edid_property(connector, edid);
+	ret += drm_add_edid_modes(connector, edid);
+	kfree(edid);
 	return ret;
 }
 
