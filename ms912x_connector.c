@@ -15,6 +15,9 @@ static int ms912x_read_edid(void *data, u8 *buf, unsigned int block, size_t len)
 	unsigned int i;
 	int ret;
 
+	if (block > 1)
+		return -EINVAL;
+
 	for (i = 0; i < len; i++) {
 		u16 address = 0xc000 + offset + i;
 

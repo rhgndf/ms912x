@@ -15,6 +15,8 @@ int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 	if (!drm_dev_enter(&ms912x->drm, &idx))
 		return -ENODEV;
 
+	mutex_lock(&ms912x->ctrl_lock);
+
 	usb_dev = interface_to_usbdev(ms912x->intf);
 	memset(&request, 0, sizeof(request));
 	request.type = 0xb5;
@@ -26,7 +28,7 @@ int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 				   0x0300, 0, &request, sizeof(request),
 				   USB_CTRL_SET_TIMEOUT, GFP_KERNEL);
 	if (ret)
-		goto dev_exit;
+		goto ctrl_unlock;
 
 	ret = usb_control_msg_recv(usb_dev, 0, HID_REQ_GET_REPORT,
 				   USB_DIR_IN | USB_TYPE_CLASS |
@@ -36,7 +38,8 @@ int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 	if (!ret)
 		ret = request.data[0];
 
-dev_exit:
+ctrl_unlock:
+	mutex_unlock(&ms912x->ctrl_lock);
 	drm_dev_exit(idx);
 	return ret;
 }
@@ -51,6 +54,8 @@ static inline int ms912x_write_6_bytes(struct ms912x_device *ms912x,
 	if (!drm_dev_enter(&ms912x->drm, &idx))
 		return -ENODEV;
 
+	mutex_lock(&ms912x->ctrl_lock);
+
 	usb_dev = interface_to_usbdev(ms912x->intf);
 	request.type = 0xa6;
 	request.addr = address;
@@ -61,6 +66,7 @@ static inline int ms912x_write_6_bytes(struct ms912x_device *ms912x,
 					   USB_RECIP_INTERFACE,
 				   0x0300, 0, &request, sizeof(request),
 				   USB_CTRL_SET_TIMEOUT, GFP_KERNEL);
+	mutex_unlock(&ms912x->ctrl_lock);
 	drm_dev_exit(idx);
 
 	return ret;

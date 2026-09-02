@@ -68,7 +68,6 @@ void ms912x_free_request(struct ms912x_usb_request *request)
 	sg_free_table(&request->transfer_sgt);
 	vfree(request->transfer_buffer);
 	request->transfer_buffer = NULL;
-	request->alloc_len = 0;
 }
 
 int ms912x_init_request(struct ms912x_device *ms912x,
@@ -99,7 +98,6 @@ int ms912x_init_request(struct ms912x_device *ms912x,
 	if (ret)
 		goto err_vfree;
 
-	request->alloc_len = len;
 	request->transfer_buffer = data;
 	request->ms912x = ms912x;
 
