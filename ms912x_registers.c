@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/hid.h>
+#include <linux/string.h>
 
 #include <drm/drm_drv.h>
 
@@ -44,8 +45,8 @@ ctrl_unlock:
 	return ret;
 }
 
-static inline int ms912x_write_6_bytes(struct ms912x_device *ms912x,
-				       u8 address, const void *data)
+static int ms912x_write_6_bytes(struct ms912x_device *ms912x,
+				u8 address, const void *data)
 {
 	struct ms912x_write_request request;
 	struct usb_device *usb_dev;
@@ -109,7 +110,7 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 	int pixel_format = mode->pix_fmt;
 	int mode_num = mode->mode;
 
-	/* Sequence obtained from Windows USB captures*/
+	/* Sequence obtained from Windows USB captures */
 	memset(data, 0, sizeof(data));
 	data[0] = 0;
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_UNKNOWN2, data);

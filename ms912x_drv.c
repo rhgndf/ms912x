@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <linux/limits.h>
 #include <linux/module.h>
 
 #include <drm/clients/drm_client_setup.h>
@@ -39,7 +40,7 @@ static int ms912x_usb_resume(struct usb_interface *interface)
 
 DEFINE_DRM_GEM_FOPS(ms912x_driver_fops);
 
-static const struct drm_driver driver = {
+static const struct drm_driver ms912x_drm_driver = {
 	.driver_features = DRIVER_ATOMIC | DRIVER_GEM | DRIVER_MODESET,
 
 	/* GEM hooks */
@@ -145,6 +146,18 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 		drm_err(dev, "failed to set display mode: %d\n", ret);
 }
 
+static void ms912x_cancel_transfer_work(struct ms912x_device *ms912x)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(ms912x->requests); i++) {
+		struct ms912x_usb_request *request = &ms912x->requests[i];
+
+		if (cancel_work_sync(&request->work))
+			complete(&request->done);
+	}
+}
+
 static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
 				       struct drm_atomic_commit *state)
 {
@@ -152,6 +165,7 @@ static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
 	struct ms912x_device *ms912x = to_ms912x(dev);
 	int ret;
 
+	ms912x_cancel_transfer_work(ms912x);
 	ret = ms912x_power_off(ms912x);
 	if (ret && ret != -ENODEV)
 		drm_err(dev, "failed to power off display: %d\n", ret);
@@ -186,6 +200,14 @@ static int ms912x_plane_atomic_check(struct drm_plane *plane,
 						   false, false);
 }
 
+static void ms912x_clear_rect(struct drm_rect *rect)
+{
+	rect->x1 = INT_MAX;
+	rect->y1 = INT_MAX;
+	rect->x2 = 0;
+	rect->y2 = 0;
+}
+
 static void ms912x_merge_rects(struct drm_rect *dest, struct drm_rect *r1,
 			       struct drm_rect *r2)
 {
@@ -216,7 +238,7 @@ static void ms912x_plane_atomic_update(struct drm_plane *plane,
 
 	if (old_plane_state->fb != new_plane_state->fb ||
 	    new_crtc_state->mode_changed)
-		drm_rect_init(&ms912x->update_rect, 0, 0, 0, 0);
+		ms912x_clear_rect(&ms912x->update_rect);
 
 	if (drm_atomic_helper_damage_merged(old_plane_state, new_plane_state,
 					    &current_rect)) {
@@ -226,7 +248,9 @@ static void ms912x_plane_atomic_update(struct drm_plane *plane,
 		 */
 		ms912x_merge_rects(&rect, &current_rect, &ms912x->update_rect);
 		if (ms912x_fb_send_rect(new_plane_state->fb,
-					&shadow_plane_state->data[0], &rect)) {
+					&shadow_plane_state->data[0],
+					&shadow_plane_state->fmtcnv_state,
+					&rect)) {
 			/* In case of error, merge the rects to update later */
 			ms912x_merge_rects(&ms912x->update_rect,
 					   &ms912x->update_rect, &rect);
@@ -282,7 +306,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	struct device *dma_dev;
 	struct usb_endpoint_descriptor *bulk_out;
 
-	ms912x = devm_drm_dev_alloc(&interface->dev, &driver,
+	ms912x = devm_drm_dev_alloc(&interface->dev, &ms912x_drm_driver,
 				    struct ms912x_device, drm);
 	if (IS_ERR(ms912x))
 		return PTR_ERR(ms912x);
@@ -306,7 +330,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		put_device(dma_dev);
 	} else {
 		drm_warn(dev,
-			 "buffer sharing not supported"); /* not an error */
+			 "buffer sharing not supported\n"); /* not an error */
 	}
 	ret = drmm_mode_config_init(dev);
 
@@ -350,6 +374,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	drm_plane_helper_add(&ms912x->plane, &ms912x_plane_helper_funcs);
 	drm_plane_enable_fb_damage_clips(&ms912x->plane);
+	ms912x_clear_rect(&ms912x->update_rect);
 
 	ret = drm_crtc_init_with_planes(dev, &ms912x->crtc, &ms912x->plane,
 					NULL, &ms912x_crtc_funcs, NULL);
@@ -372,18 +397,16 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	usb_set_intfdata(interface, ms912x);
 
-	drm_kms_helper_poll_init(dev);
+	drmm_kms_helper_poll_init(dev);
 
 	ret = drm_dev_register(dev, 0);
 	if (ret)
-		goto err_poll_fini;
+		goto err_free_request_1;
 
 	drm_client_setup(dev, NULL);
 
 	return 0;
 
-err_poll_fini:
-	drm_kms_helper_poll_fini(dev);
 err_free_request_1:
 	ms912x_free_request(&ms912x->requests[1]);
 err_free_request_0:
@@ -396,11 +419,9 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	struct ms912x_device *ms912x = usb_get_intfdata(interface);
 	struct drm_device *dev = &ms912x->drm;
 
-	drm_kms_helper_poll_fini(dev);
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
-	cancel_work_sync(&ms912x->requests[0].work);
-	cancel_work_sync(&ms912x->requests[1].work);
+	ms912x_cancel_transfer_work(ms912x);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
 }
@@ -415,7 +436,7 @@ static void ms912x_usb_shutdown(struct usb_interface *interface)
 static const struct usb_device_id id_table[] = {
 	/* USB 2 */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x534d, 0x6021, 0xff, 0x00, 0x00) },
-	/* USB 2 Sometimes this PID will pop up*/
+	/* USB 2 Sometimes this PID will pop up */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x534d, 0x0821, 0xff, 0x00, 0x00) },
 	/* USB 3 */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9132, 0xff, 0x00, 0x00) },

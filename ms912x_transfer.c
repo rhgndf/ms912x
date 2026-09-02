@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/dma-buf.h>
+#include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/timer.h>
 #include <linux/unaligned.h>
@@ -64,7 +65,6 @@ void ms912x_free_request(struct ms912x_usb_request *request)
 		return;
 
 	timer_shutdown_sync(&request->timer);
-	drm_format_conv_state_release(&request->fmtcnv_state);
 	sg_free_table(&request->transfer_sgt);
 	vfree(request->transfer_buffer);
 	request->transfer_buffer = NULL;
@@ -101,7 +101,6 @@ int ms912x_init_request(struct ms912x_device *ms912x,
 	request->transfer_buffer = data;
 	request->ms912x = ms912x;
 
-	drm_format_conv_state_init(&request->fmtcnv_state);
 	init_completion(&request->done);
 	complete(&request->done);
 	timer_setup(&request->timer, ms912x_request_timeout, 0);
@@ -223,6 +222,7 @@ static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 }
 
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
+			struct drm_format_conv_state *fmtcnv_state,
 			struct drm_rect *rect)
 {
 	int ret = 0, idx;
@@ -233,7 +233,7 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 
 	/* UYVY stores pixels in pairs. Expand damage to a complete pair. */
 	x = ALIGN_DOWN(rect->x1, 2);
-	width = min(ALIGN(rect->x2, 2), (int)fb->width) - x;
+	width = min_t(int, ALIGN(rect->x2, 2), fb->width) - x;
 	rect->x1 = x;
 	rect->x2 = x + width;
 	current_request = &ms912x->requests[ms912x->current_request];
@@ -253,8 +253,7 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 		goto request_complete;
 
 	ret = ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer,
-					   map, fb, rect,
-					   &current_request->fmtcnv_state);
+					   map, fb, rect, fmtcnv_state);
 
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 	if (ret < 0)

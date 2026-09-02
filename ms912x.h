@@ -3,9 +3,11 @@
 #ifndef MS912X_H
 #define MS912X_H
 
-#include <linux/mm_types.h>
+#include <linux/completion.h>
 #include <linux/mutex.h>
 #include <linux/scatterlist.h>
+#include <linux/timer_types.h>
+#include <linux/types.h>
 #include <linux/usb.h>
 #include <linux/workqueue.h>
 
@@ -52,7 +54,6 @@ struct ms912x_usb_request {
 	struct work_struct work;
 	struct timer_list timer;
 	struct completion done;
-	struct drm_format_conv_state fmtcnv_state;
 };
 
 struct ms912x_device {
@@ -60,6 +61,7 @@ struct ms912x_device {
 	struct usb_interface *intf;
 	unsigned int bulk_pipe;
 	struct workqueue_struct *workqueue;
+	/* Serializes the two messages in ms912x_read_byte */
 	struct mutex ctrl_lock;
 
 	struct drm_connector connector;
@@ -135,6 +137,7 @@ int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
 
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
+			struct drm_format_conv_state *fmtcnv_state,
 			struct drm_rect *rect);
 
 void ms912x_free_request(struct ms912x_usb_request *request);

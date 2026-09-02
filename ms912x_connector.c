@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <linux/limits.h>
+
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_edid.h>
@@ -14,9 +16,6 @@ static int ms912x_read_edid(void *data, u8 *buf, unsigned int block, size_t len)
 	int offset = block * EDID_LENGTH;
 	unsigned int i;
 	int ret;
-
-	if (block > 1)
-		return -EINVAL;
 
 	for (i = 0; i < len; i++) {
 		u16 address = MS912X_REG_EDID_BASE + offset + i;
