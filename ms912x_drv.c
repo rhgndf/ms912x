@@ -325,6 +325,11 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		return ret;
 
+	ms912x->workqueue =
+		drmm_alloc_ordered_workqueue(dev, DRIVER_NAME, 0);
+	if (IS_ERR(ms912x->workqueue))
+		return PTR_ERR(ms912x->workqueue);
+
 	ret = ms912x_init_request(ms912x, &ms912x->requests[0],
 				  MS912X_MAX_TRANSFER_LEN);
 	if (ret)
@@ -334,7 +339,6 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 				  MS912X_MAX_TRANSFER_LEN);
 	if (ret)
 		goto err_free_request_0;
-	complete(&ms912x->requests[1].done);
 
 	ret = drm_universal_plane_init(dev, &ms912x->plane, 0,
 				       &ms912x_plane_funcs,

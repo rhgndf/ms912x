@@ -19,7 +19,7 @@ int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
 
 	usb_dev = interface_to_usbdev(ms912x->intf);
 	memset(&request, 0, sizeof(request));
-	request.type = 0xb5;
+	request.type = MS912X_REQ_TYPE_READ_BYTE;
 	request.addr = cpu_to_be16(address);
 
 	ret = usb_control_msg_send(usb_dev, 0, HID_REQ_SET_REPORT,
@@ -57,7 +57,7 @@ static inline int ms912x_write_6_bytes(struct ms912x_device *ms912x,
 	mutex_lock(&ms912x->ctrl_lock);
 
 	usb_dev = interface_to_usbdev(ms912x->intf);
-	request.type = 0xa6;
+	request.type = MS912X_REQ_TYPE_WRITE_6_BYTES;
 	request.addr = address;
 	memcpy(request.data, data, sizeof(request.data));
 
@@ -116,13 +116,13 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 	if (ret < 0)
 		return ret;
 
-	ret = ms912x_read_byte(ms912x, 0x30);
+	ret = ms912x_read_byte(ms912x, MS912X_REG_MODE_SEQUENCE_0);
 	if (ret < 0)
 		return ret;
-	ret = ms912x_read_byte(ms912x, 0x33);
+	ret = ms912x_read_byte(ms912x, MS912X_REG_MODE_SEQUENCE_1);
 	if (ret < 0)
 		return ret;
-	ret = ms912x_read_byte(ms912x, 0xc620);
+	ret = ms912x_read_byte(ms912x, MS912X_REG_MODE_SEQUENCE_2);
 	if (ret < 0)
 		return ret;
 

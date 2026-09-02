@@ -103,6 +103,7 @@ int ms912x_init_request(struct ms912x_device *ms912x,
 
 	drm_format_conv_state_init(&request->fmtcnv_state);
 	init_completion(&request->done);
+	complete(&request->done);
 	timer_setup(&request->timer, ms912x_request_timeout, 0);
 	INIT_WORK(&request->work, ms912x_request_work);
 	return 0;
@@ -227,7 +228,7 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	int ret = 0, idx;
 	struct ms912x_device *ms912x = to_ms912x(fb->dev);
 	struct drm_device *drm = &ms912x->drm;
-	struct ms912x_usb_request *prev_request, *current_request;
+	struct ms912x_usb_request *current_request;
 	int x, width;
 
 	/* UYVY stores pixels in pairs. Expand damage to a complete pair. */
@@ -236,14 +237,20 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	rect->x1 = x;
 	rect->x2 = x + width;
 	current_request = &ms912x->requests[ms912x->current_request];
-	prev_request = &ms912x->requests[1 - ms912x->current_request];
 
 	if (!drm_dev_enter(drm, &idx))
 		return -ENODEV;
 
+	/* Transfer buffer still in use, drop this frame. */
+	if (!wait_for_completion_timeout(&current_request->done,
+					 msecs_to_jiffies(10))) {
+		ret = -ETIMEDOUT;
+		goto dev_exit;
+	}
+
 	ret = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
 	if (ret < 0)
-		goto dev_exit;
+		goto request_complete;
 
 	ret = ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer,
 					   map, fb, rect,
@@ -251,19 +258,16 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 	if (ret < 0)
-		goto dev_exit;
-
-	/* Sending frames too fast, drop it */
-	if (!wait_for_completion_timeout(&prev_request->done,
-					 msecs_to_jiffies(10))) {
-		ret = -ETIMEDOUT;
-		goto dev_exit;
-	}
+		goto request_complete;
 
 	current_request->transfer_len =
 		width * 2 * drm_rect_height(rect) + MS912X_FRAME_OVERHEAD;
-	queue_work(system_long_wq, &current_request->work);
+	queue_work(ms912x->workqueue, &current_request->work);
 	ms912x->current_request = 1 - ms912x->current_request;
+	goto dev_exit;
+
+request_complete:
+	complete(&current_request->done);
 dev_exit:
 	drm_dev_exit(idx);
 	return ret;

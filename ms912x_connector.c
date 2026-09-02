@@ -19,7 +19,7 @@ static int ms912x_read_edid(void *data, u8 *buf, unsigned int block, size_t len)
 		return -EINVAL;
 
 	for (i = 0; i < len; i++) {
-		u16 address = 0xc000 + offset + i;
+		u16 address = MS912X_REG_EDID_BASE + offset + i;
 
 		ret = ms912x_read_byte(ms912x, address);
 		if (ret < 0)
@@ -53,7 +53,7 @@ static enum drm_connector_status ms912x_detect(struct drm_connector *connector,
 					       bool force)
 {
 	struct ms912x_device *ms912x = to_ms912x(connector->dev);
-	int status = ms912x_read_byte(ms912x, 0x32);
+	int status = ms912x_read_byte(ms912x, MS912X_REG_DISPLAY_STATUS);
 
 	if (status < 0)
 		return connector_status_unknown;

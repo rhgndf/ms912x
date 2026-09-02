@@ -7,6 +7,7 @@
 #include <linux/mutex.h>
 #include <linux/scatterlist.h>
 #include <linux/usb.h>
+#include <linux/workqueue.h>
 
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
@@ -24,6 +25,16 @@
 #define DRIVER_MAJOR 1
 #define DRIVER_MINOR 0
 #define DRIVER_PATCHLEVEL 1
+
+#define MS912X_REQ_TYPE_WRITE_6_BYTES	0xa6
+#define MS912X_REQ_TYPE_READ_BYTE	0xb5
+
+#define MS912X_REG_DISPLAY_STATUS	0x0032
+#define MS912X_REG_EDID_BASE		0xc000
+
+#define MS912X_REG_MODE_SEQUENCE_0	0x0030
+#define MS912X_REG_MODE_SEQUENCE_1	0x0033
+#define MS912X_REG_MODE_SEQUENCE_2	0xc620
 
 #define MS912X_CMD_RESOLUTION		0x01
 #define MS912X_CMD_MODE			0x02
@@ -48,6 +59,7 @@ struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
 	unsigned int bulk_pipe;
+	struct workqueue_struct *workqueue;
 	struct mutex ctrl_lock;
 
 	struct drm_connector connector;
