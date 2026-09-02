@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <asm/byteorder.h>
 #include <linux/hid.h>
+#include <linux/mutex.h>
 #include <linux/string.h>
+#include <linux/usb.h>
 
 #include <drm/drm_drv.h>
 
@@ -75,26 +78,22 @@ static int ms912x_write_6_bytes(struct ms912x_device *ms912x,
 
 int ms912x_power_on(struct ms912x_device *ms912x)
 {
-	int ret;
 	u8 data[6];
 
 	memset(data, 0, sizeof(data));
 	data[0] = 0x01;
 	data[1] = 0x02;
-	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_POWER, data);
 
-	return ret;
+	return ms912x_write_6_bytes(ms912x, MS912X_CMD_POWER, data);
 }
 
 int ms912x_power_off(struct ms912x_device *ms912x)
 {
-	int ret;
 	u8 data[6];
 
 	memset(data, 0, sizeof(data));
-	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_POWER, data);
 
-	return ret;
+	return ms912x_write_6_bytes(ms912x, MS912X_CMD_POWER, data);
 }
 
 int ms912x_set_resolution(struct ms912x_device *ms912x,

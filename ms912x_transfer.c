@@ -1,10 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <asm/byteorder.h>
+#include <linux/align.h>
+#include <linux/completion.h>
+#include <linux/container_of.h>
 #include <linux/dma-buf.h>
+#include <linux/iosys-map.h>
+#include <linux/jiffies.h>
+#include <linux/math.h>
+#include <linux/minmax.h>
+#include <linux/scatterlist.h>
 #include <linux/slab.h>
-#include <linux/vmalloc.h>
+#include <linux/string.h>
 #include <linux/timer.h>
 #include <linux/unaligned.h>
+#include <linux/usb.h>
+#include <linux/vmalloc.h>
+#include <linux/workqueue.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_gem_framebuffer_helper.h>

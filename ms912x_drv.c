@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <linux/completion.h>
 #include <linux/limits.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/pm.h>
+#include <linux/usb.h>
+#include <linux/workqueue.h>
 
 #include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic.h>
@@ -52,7 +57,6 @@ static const struct drm_driver ms912x_drm_driver = {
 	.desc = DRIVER_DESC,
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
-	.patchlevel = DRIVER_PATCHLEVEL,
 };
 
 static const struct drm_mode_config_funcs ms912x_mode_config_funcs = {
@@ -194,6 +198,13 @@ static int ms912x_plane_atomic_check(struct drm_plane *plane,
 		crtc_state = drm_atomic_get_new_crtc_state(state,
 							   new_plane_state->crtc);
 
+	/*
+	 * A mode set does change how the device interprets the framebuffer
+	 * so ask for a full plane update for the first frame after one.
+	 */
+	new_plane_state->ignore_damage_clips =
+		crtc_state && drm_atomic_crtc_needs_modeset(crtc_state);
+
 	return drm_atomic_helper_check_plane_state(new_plane_state, crtc_state,
 						   DRM_PLANE_NO_SCALING,
 						   DRM_PLANE_NO_SCALING,
@@ -236,8 +247,8 @@ static void ms912x_plane_atomic_update(struct drm_plane *plane,
 						       new_plane_state->crtc);
 	shadow_plane_state = to_drm_shadow_plane_state(new_plane_state);
 
-	if (old_plane_state->fb != new_plane_state->fb ||
-	    new_crtc_state->mode_changed)
+	/* Damage from the previous mode may not fit the new framebuffer. */
+	if (drm_atomic_crtc_needs_modeset(new_crtc_state))
 		ms912x_clear_rect(&ms912x->update_rect);
 
 	if (drm_atomic_helper_damage_merged(old_plane_state, new_plane_state,
@@ -333,7 +344,6 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 			 "buffer sharing not supported\n"); /* not an error */
 	}
 	ret = drmm_mode_config_init(dev);
-
 	if (ret)
 		return ret;
 
