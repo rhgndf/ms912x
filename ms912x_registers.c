@@ -106,7 +106,6 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 
 	int width = mode->width;
 	int height = mode->height;
-	int pixel_format = mode->pix_fmt;
 	int mode_num = mode->mode;
 
 	/* Sequence obtained from Windows USB captures */
@@ -135,14 +134,16 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 	/* Write resolution */
 	resolution_request.width = cpu_to_be16(width);
 	resolution_request.height = cpu_to_be16(height);
-	resolution_request.pixel_format = cpu_to_be16(pixel_format);
+	resolution_request.pixel_format = MS912X_PIXFMT_UYVY;
+	resolution_request.byte_select = MS912X_BYTE_SELECT_UYVY;
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_RESOLUTION,
 				   &resolution_request);
 	if (ret < 0)
 		return ret;
 
 	/* Write mode */
-	mode_request.mode = cpu_to_be16(mode_num);
+	mode_request.mode = mode_num;
+	mode_request.pixel_format = 0x01;
 	mode_request.width = cpu_to_be16(width);
 	mode_request.height = cpu_to_be16(height);
 	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_MODE, &mode_request);

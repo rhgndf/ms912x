@@ -14,7 +14,6 @@
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_encoder.h>
 #include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem_atomic_helper.h>
@@ -77,32 +76,32 @@ ms912x_mode_config_helper_funcs = {
 
 static const struct ms912x_mode ms912x_mode_list[] = {
 	/* Found in captures of the Windows driver and dumped from device */
-	MS912X_MODE( 720,  480, 60, 0x0200, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
-	MS912X_MODE( 720,  576, 50, 0x1100, MS912X_PIXFMT_UYVY), /* 50.00 Hz */
-	MS912X_MODE(1280,  720, 50, 0x1300, MS912X_PIXFMT_UYVY), /* 50.00 Hz */
-	MS912X_MODE(1920, 1080, 50, 0x1f00, MS912X_PIXFMT_UYVY), /* 50.00 Hz */
-	MS912X_MODE(1920, 1080, 30, 0x2200, MS912X_PIXFMT_UYVY), /* 30.00 Hz */
-	MS912X_MODE( 640,  480, 60, 0x4000, MS912X_PIXFMT_UYVY), /* 59.94 Hz */
-	MS912X_MODE( 800,  600, 60, 0x4200, MS912X_PIXFMT_UYVY), /* 60.32 Hz */
-	MS912X_MODE( 800,  600, 75, 0x4400, MS912X_PIXFMT_UYVY), /* 75.00 Hz */
-	MS912X_MODE(1024,  768, 60, 0x4700, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
-	MS912X_MODE(1024,  768, 75, 0x4900, MS912X_PIXFMT_UYVY), /* 75.03 Hz */
-	MS912X_MODE(1152,  864, 60, 0x4c00, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
-	MS912X_MODE(1280,  600, 60, 0x4e00, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
-	MS912X_MODE(1280,  720, 60, 0x4f00, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
-	MS912X_MODE(1280,  768, 60, 0x5400, MS912X_PIXFMT_UYVY), /* 59.87 Hz */
-	MS912X_MODE(1280,  768, 75, 0x5600, MS912X_PIXFMT_UYVY), /* 74.89 Hz */
-	MS912X_MODE(1280,  800, 60, 0x5700, MS912X_PIXFMT_UYVY), /* 59.81 Hz */
-	MS912X_MODE(1280,  960, 60, 0x5b00, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
-	MS912X_MODE(1280, 1024, 60, 0x6000, MS912X_PIXFMT_UYVY), /* 60.02 Hz */
-	MS912X_MODE(1280, 1024, 75, 0x6100, MS912X_PIXFMT_UYVY), /* 75.02 Hz */
-	MS912X_MODE(1360,  768, 60, 0x6400, MS912X_PIXFMT_UYVY), /* 60.02 Hz */
-	MS912X_MODE(1366,  768, 60, 0x6600, MS912X_PIXFMT_UYVY), /* 59.79 Hz */
-	MS912X_MODE(1400, 1050, 60, 0x6700, MS912X_PIXFMT_UYVY), /* 59.98 Hz */
-	MS912X_MODE(1440,  900, 60, 0x6b00, MS912X_PIXFMT_UYVY), /* 59.89 Hz */
-	MS912X_MODE(1600, 1200, 60, 0x7300, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
-	MS912X_MODE(1680, 1050, 60, 0x7800, MS912X_PIXFMT_UYVY), /* 59.95 Hz */
-	MS912X_MODE(1920, 1080, 60, 0x8100, MS912X_PIXFMT_UYVY), /* 60.00 Hz */
+	MS912X_MODE(720, 480, 60, 0x02), /* 60.00 Hz */
+	MS912X_MODE(720, 576, 50, 0x11), /* 50.00 Hz */
+	MS912X_MODE(1280,  720, 50, 0x13), /* 50.00 Hz */
+	MS912X_MODE(1920, 1080, 50, 0x1f), /* 50.00 Hz */
+	MS912X_MODE(1920, 1080, 30, 0x22), /* 30.00 Hz */
+	MS912X_MODE(640, 480, 60, 0x40), /* 59.94 Hz */
+	MS912X_MODE(800, 600, 60, 0x42), /* 60.32 Hz */
+	MS912X_MODE(800, 600, 75, 0x44), /* 75.00 Hz */
+	MS912X_MODE(1024,  768, 60, 0x47), /* 60.00 Hz */
+	MS912X_MODE(1024,  768, 75, 0x49), /* 75.03 Hz */
+	MS912X_MODE(1152,  864, 60, 0x4c), /* 60.00 Hz */
+	MS912X_MODE(1280,  600, 60, 0x4e), /* 60.00 Hz */
+	MS912X_MODE(1280,  720, 60, 0x4f), /* 60.00 Hz */
+	MS912X_MODE(1280,  768, 60, 0x54), /* 59.87 Hz */
+	MS912X_MODE(1280,  768, 75, 0x56), /* 74.89 Hz */
+	MS912X_MODE(1280,  800, 60, 0x57), /* 59.81 Hz */
+	MS912X_MODE(1280,  960, 60, 0x5b), /* 60.00 Hz */
+	MS912X_MODE(1280, 1024, 60, 0x60), /* 60.02 Hz */
+	MS912X_MODE(1280, 1024, 75, 0x61), /* 75.02 Hz */
+	MS912X_MODE(1360,  768, 60, 0x64), /* 60.02 Hz */
+	MS912X_MODE(1366,  768, 60, 0x66), /* 59.79 Hz */
+	MS912X_MODE(1400, 1050, 60, 0x67), /* 59.98 Hz */
+	MS912X_MODE(1440,  900, 60, 0x6b), /* 59.89 Hz */
+	MS912X_MODE(1600, 1200, 60, 0x73), /* 60.00 Hz */
+	MS912X_MODE(1680, 1050, 60, 0x78), /* 59.95 Hz */
+	MS912X_MODE(1920, 1080, 60, 0x81), /* 60.00 Hz */
 };
 
 static const struct ms912x_mode *
@@ -287,10 +286,6 @@ static const struct drm_crtc_funcs ms912x_crtc_funcs = {
 	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
 };
 
-static const struct drm_encoder_funcs ms912x_encoder_funcs = {
-	.destroy = drm_encoder_cleanup,
-};
-
 static const struct drm_plane_helper_funcs ms912x_plane_helper_funcs = {
 	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
 	.atomic_check = ms912x_plane_atomic_check,
@@ -308,6 +303,10 @@ static const u32 ms912x_plane_formats[] = {
 	DRM_FORMAT_XRGB8888,
 };
 
+static const u8 ms912x_bulk_out_endpoints[] = {
+	MS912X_BULK_OUT_ENDPOINT, 0
+};
+
 static int ms912x_usb_probe(struct usb_interface *interface,
 			    const struct usb_device_id *id)
 {
@@ -315,7 +314,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	struct ms912x_device *ms912x;
 	struct drm_device *dev;
 	struct device *dma_dev;
-	struct usb_endpoint_descriptor *bulk_out;
+	struct usb_device *usbdev;
 
 	ms912x = devm_drm_dev_alloc(&interface->dev, &ms912x_drm_driver,
 				    struct ms912x_device, drm);
@@ -327,12 +326,12 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		return ret;
 
-	ret = usb_find_bulk_out_endpoint(interface->cur_altsetting, &bulk_out);
-	if (ret)
-		return ret;
+	if (!usb_check_bulk_endpoints(interface, ms912x_bulk_out_endpoints))
+		return -ENXIO;
+
+	usbdev = interface_to_usbdev(interface);
 	ms912x->bulk_pipe =
-		usb_sndbulkpipe(interface_to_usbdev(interface),
-				usb_endpoint_num(bulk_out));
+		usb_sndbulkpipe(usbdev, MS912X_BULK_OUT_ENDPOINT);
 	dev = &ms912x->drm;
 
 	dma_dev = usb_intf_get_dma_device(interface);
@@ -393,12 +392,6 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	drm_crtc_helper_add(&ms912x->crtc, &ms912x_crtc_helper_funcs);
 
-	ret = drm_encoder_init(dev, &ms912x->encoder, &ms912x_encoder_funcs,
-			       DRM_MODE_ENCODER_TMDS, NULL);
-	if (ret)
-		goto err_free_request_1;
-	ms912x->encoder.possible_crtcs = drm_crtc_mask(&ms912x->crtc);
-
 	ret = ms912x_connector_init(ms912x);
 	if (ret)
 		goto err_free_request_1;
@@ -451,6 +444,7 @@ static const struct usb_device_id id_table[] = {
 	/* USB 3 */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9132, 0xff, 0x00, 0x00) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9133, 0xff, 0x00, 0x00) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9135, 0xff, 0x00, 0x00) },
 	{},
 };
 MODULE_DEVICE_TABLE(usb, id_table);

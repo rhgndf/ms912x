@@ -1,14 +1,71 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-#include <linux/limits.h>
-
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_encoder.h>
 #include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_print.h>
 
 #include "ms912x.h"
+
+static int ms912x_get_connector_type(struct ms912x_device *ms912x)
+{
+	int port_type;
+
+	port_type = ms912x_read_byte(ms912x, MS912X_REG_VIDEO_PORT);
+	if (port_type < 0) {
+		drm_warn(&ms912x->drm,
+			 "failed to read video port type: %d\n", port_type);
+		ms912x->port_type = MS912X_VIDEO_PORT_UNKNOWN;
+		return DRM_MODE_CONNECTOR_Unknown;
+	}
+
+	ms912x->port_type = port_type;
+
+	switch (ms912x->port_type) {
+	case MS912X_VIDEO_PORT_CVBS:
+		return DRM_MODE_CONNECTOR_Composite;
+	case MS912X_VIDEO_PORT_SVIDEO:
+		return DRM_MODE_CONNECTOR_SVIDEO;
+	case MS912X_VIDEO_PORT_VGA:
+		return DRM_MODE_CONNECTOR_VGA;
+	case MS912X_VIDEO_PORT_YPBPR:
+		return DRM_MODE_CONNECTOR_Component;
+	case MS912X_VIDEO_PORT_HDMI:
+		return DRM_MODE_CONNECTOR_HDMIA;
+	case MS912X_VIDEO_PORT_DIGITAL:
+		return DRM_MODE_CONNECTOR_DPI;
+	case MS912X_VIDEO_PORT_CVBS_SVIDEO:
+	default:
+		drm_warn(&ms912x->drm,
+			 "unknown video port type: %d\n", port_type);
+		ms912x->port_type = MS912X_VIDEO_PORT_UNKNOWN;
+		return DRM_MODE_CONNECTOR_Unknown;
+	}
+}
+
+static int
+ms912x_get_encoder_type(enum ms912x_video_port port_type)
+{
+	switch (port_type) {
+	case MS912X_VIDEO_PORT_VGA:
+		return DRM_MODE_ENCODER_DAC;
+	case MS912X_VIDEO_PORT_CVBS:
+	case MS912X_VIDEO_PORT_SVIDEO:
+	case MS912X_VIDEO_PORT_YPBPR:
+	case MS912X_VIDEO_PORT_CVBS_SVIDEO:
+		return DRM_MODE_ENCODER_TVDAC;
+	case MS912X_VIDEO_PORT_HDMI:
+		return DRM_MODE_ENCODER_TMDS;
+	case MS912X_VIDEO_PORT_DIGITAL:
+		return DRM_MODE_ENCODER_DPI;
+	case MS912X_VIDEO_PORT_UNKNOWN:
+	default:
+		return DRM_MODE_ENCODER_NONE;
+	}
+}
 
 static int ms912x_read_edid(void *data, u8 *buf, unsigned int block, size_t len)
 {
@@ -61,6 +118,10 @@ static enum drm_connector_status ms912x_detect(struct drm_connector *connector,
 			     connector_status_disconnected;
 }
 
+static const struct drm_encoder_funcs ms912x_encoder_funcs = {
+	.destroy = drm_encoder_cleanup,
+};
+
 static const struct drm_connector_helper_funcs ms912x_connector_helper_funcs = {
 	.get_modes = ms912x_connector_get_modes,
 };
@@ -77,12 +138,22 @@ static const struct drm_connector_funcs ms912x_connector_funcs = {
 int ms912x_connector_init(struct ms912x_device *ms912x)
 {
 	int ret;
+	int connector_type;
+	int encoder_type;
+
+	connector_type = ms912x_get_connector_type(ms912x);
+	encoder_type = ms912x_get_encoder_type(ms912x->port_type);
+
+	ret = drm_encoder_init(&ms912x->drm, &ms912x->encoder,
+			       &ms912x_encoder_funcs, encoder_type, NULL);
+	if (ret)
+		return ret;
+	ms912x->encoder.possible_crtcs = drm_crtc_mask(&ms912x->crtc);
 
 	drm_connector_helper_add(&ms912x->connector,
 				 &ms912x_connector_helper_funcs);
 	ret = drm_connector_init(&ms912x->drm, &ms912x->connector,
-				 &ms912x_connector_funcs,
-				 DRM_MODE_CONNECTOR_HDMIA);
+				 &ms912x_connector_funcs, connector_type);
 	if (ret)
 		return ret;
 

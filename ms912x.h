@@ -27,9 +27,13 @@
 #define DRIVER_MAJOR 1
 #define DRIVER_MINOR 0
 
+#define MS912X_BULK_OUT_ENDPOINT	4
+
 #define MS912X_REQ_TYPE_WRITE_6_BYTES	0xa6
 #define MS912X_REQ_TYPE_READ_BYTE	0xb5
 
+#define MS912X_REG_SDRAM_TYPE		0x0030
+#define MS912X_REG_VIDEO_PORT		0x0031
 #define MS912X_REG_DISPLAY_STATUS	0x0032
 #define MS912X_REG_EDID_BASE		0xc000
 
@@ -43,6 +47,17 @@
 #define MS912X_CMD_UNKNOWN2		0x04
 #define MS912X_CMD_OUTPUT_ENABLE	0x05
 #define MS912X_CMD_POWER		0x07
+
+enum ms912x_video_port {
+	MS912X_VIDEO_PORT_CVBS = 0,
+	MS912X_VIDEO_PORT_SVIDEO = 1,
+	MS912X_VIDEO_PORT_VGA = 2,
+	MS912X_VIDEO_PORT_YPBPR = 3,
+	MS912X_VIDEO_PORT_CVBS_SVIDEO = 4,
+	MS912X_VIDEO_PORT_HDMI = 5,
+	MS912X_VIDEO_PORT_DIGITAL = 6,
+	MS912X_VIDEO_PORT_UNKNOWN = 0xff,
+};
 
 struct ms912x_usb_request {
 	void *transfer_buffer;
@@ -59,6 +74,7 @@ struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
 	unsigned int bulk_pipe;
+	enum ms912x_video_port port_type;
 	struct workqueue_struct *workqueue;
 	/* Serializes the two messages in ms912x_read_byte */
 	struct mutex ctrl_lock;
@@ -92,11 +108,13 @@ struct ms912x_write_request {
 struct ms912x_resolution_request {
 	__be16 width;
 	__be16 height;
-	__be16 pixel_format;
+	u8 pixel_format;
+	u8 byte_select;
 } __packed;
 
 struct ms912x_mode_request {
-	__be16 mode;
+	u8 mode;
+	u8 pixel_format;
 	__be16 width;
 	__be16 height;
 } __packed;
@@ -114,15 +132,15 @@ struct ms912x_mode {
 	int height;
 	int hz;
 	int mode;
-	int pix_fmt;
 };
 
-#define MS912X_PIXFMT_UYVY 0x2200
-#define MS912X_PIXFMT_RGB 0x1100
+#define MS912X_PIXFMT_RGB888		0x11
+#define MS912X_PIXFMT_UYVY		0x22
+#define MS912X_BYTE_SELECT_UYVY		0x00
 
-#define MS912X_MODE(w, h, z, m, f)                                             \
+#define MS912X_MODE(w, h, z, m)                                               \
 	{                                                                      \
-		.width = w, .height = h, .hz = z, .mode = m, .pix_fmt = f      \
+		.width = w, .height = h, .hz = z, .mode = m                    \
 	}
 
 #define to_ms912x(x) container_of(x, struct ms912x_device, drm)
