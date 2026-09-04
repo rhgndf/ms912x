@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <linux/array_size.h>
+
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_edid.h>
@@ -85,15 +87,85 @@ static int ms912x_read_edid(void *data, u8 *buf, unsigned int block, size_t len)
 	return 0;
 }
 
+static int ms912x_add_cea_modes(struct drm_connector *connector,
+				const u8 *vics, size_t num_vics)
+{
+	struct drm_display_mode *mode;
+	unsigned int i;
+	int count = 0;
+
+	drm_edid_connector_update(connector, NULL);
+
+	for (i = 0; i < num_vics; i++) {
+		mode = drm_display_mode_from_cea_vic(connector->dev, vics[i]);
+		if (!mode)
+			continue;
+
+		if (!count)
+			mode->type |= DRM_MODE_TYPE_PREFERRED;
+		drm_mode_probed_add(connector, mode);
+		count++;
+	}
+
+	return count;
+}
+
+static int ms912x_add_cvbs_svideo_modes(struct drm_connector *connector)
+{
+	static const u8 vics[] = {
+		2,  /* 720x480p60 */
+		17, /* 720x576p50 */
+	};
+
+	return ms912x_add_cea_modes(connector, vics, ARRAY_SIZE(vics));
+}
+
+static int ms912x_add_ypbpr_modes(struct drm_connector *connector)
+{
+	static const u8 vics[] = {
+		4,  /* 1280x720p60 */
+		16, /* 1920x1080p60 */
+		2,  /* 720x480p60 */
+		17, /* 720x576p50 */
+	};
+
+	return ms912x_add_cea_modes(connector, vics, ARRAY_SIZE(vics));
+}
+
+static int
+ms912x_add_default_hdmi_vga_modes(struct drm_connector *connector)
+{
+	struct drm_mode_config *mode_config = &connector->dev->mode_config;
+	int count;
+
+	drm_edid_connector_update(connector, NULL);
+	count = drm_add_modes_noedid(connector, mode_config->max_width,
+				     mode_config->max_height);
+	if (count)
+		drm_set_preferred_mode(connector, 1024, 768);
+
+	return count;
+}
+
 static int ms912x_connector_get_modes(struct drm_connector *connector)
 {
-	int ret;
 	struct ms912x_device *ms912x = to_ms912x(connector->dev);
 	const struct drm_edid *edid;
+	int ret;
+
+	if (ms912x->port_type == MS912X_VIDEO_PORT_CVBS ||
+	    ms912x->port_type == MS912X_VIDEO_PORT_SVIDEO ||
+	    ms912x->port_type == MS912X_VIDEO_PORT_CVBS_SVIDEO ||
+	    ms912x->port_type == MS912X_VIDEO_PORT_UNKNOWN)
+		return ms912x_add_cvbs_svideo_modes(connector);
+
+	if (ms912x->port_type == MS912X_VIDEO_PORT_YPBPR)
+		return ms912x_add_ypbpr_modes(connector);
 
 	edid = drm_edid_read_custom(connector, ms912x_read_edid, ms912x);
 	if (!edid)
-		return 0;
+		return ms912x_add_default_hdmi_vga_modes(connector);
+
 	ret = drm_edid_connector_update(connector, edid);
 	if (ret < 0) {
 		ret = 0;
