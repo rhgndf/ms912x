@@ -6,6 +6,7 @@ There are three variants:
 - VID/PID is 534d:6021. Device is USB 2
 - VID/PID is 534d:0821. Device is USB 2
 - VID/PID is 345f:9132. Device is USB 3
+- VID/PID is 345f:9133. Device is USB 3
 
 ## Supported kernels
 
