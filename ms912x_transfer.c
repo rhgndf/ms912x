@@ -4,7 +4,7 @@
 #include <linux/align.h>
 #include <linux/completion.h>
 #include <linux/container_of.h>
-#include <linux/dma-buf.h>
+#include <linux/dma-direction.h>
 #include <linux/iosys-map.h>
 #include <linux/jiffies.h>
 #include <linux/math.h>
@@ -19,6 +19,8 @@
 #include <linux/workqueue.h>
 
 #include <drm/drm_drv.h>
+#include <drm/drm_format_helper.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
 
@@ -65,7 +67,7 @@ static void ms912x_request_work(struct work_struct *work)
 dev_exit:
 	drm_dev_exit(idx);
 complete:
-	if (ret < 0)
+	if (ret < 0 && ret != -ENODEV)
 		drm_err_ratelimited(&ms912x->drm,
 				    "failed to send framebuffer: %d\n", ret);
 	complete(&request->done);

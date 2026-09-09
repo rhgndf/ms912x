@@ -40,6 +40,7 @@ static int ms912x_get_connector_type(struct ms912x_device *ms912x)
 	case MS912X_VIDEO_PORT_DIGITAL:
 		return DRM_MODE_CONNECTOR_DPI;
 	case MS912X_VIDEO_PORT_CVBS_SVIDEO:
+		return DRM_MODE_CONNECTOR_9PinDIN;
 	default:
 		drm_warn(&ms912x->drm,
 			 "unknown video port type: %d\n", port_type);

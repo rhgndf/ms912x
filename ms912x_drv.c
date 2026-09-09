@@ -189,9 +189,11 @@ ms912x_crtc_mode_valid(struct drm_crtc *crtc,
 static int ms912x_plane_atomic_check(struct drm_plane *plane,
 				     struct drm_atomic_commit *state)
 {
+	struct drm_plane_state *old_plane_state;
 	struct drm_plane_state *new_plane_state;
 	struct drm_crtc_state *crtc_state = NULL;
 
+	old_plane_state = drm_atomic_get_old_plane_state(state, plane);
 	new_plane_state = drm_atomic_get_new_plane_state(state, plane);
 	if (new_plane_state->crtc)
 		crtc_state = drm_atomic_get_new_crtc_state(state,
@@ -202,7 +204,8 @@ static int ms912x_plane_atomic_check(struct drm_plane *plane,
 	 * so ask for a full plane update for the first frame after one.
 	 */
 	new_plane_state->ignore_damage_clips =
-		crtc_state && drm_atomic_crtc_needs_modeset(crtc_state);
+		old_plane_state->fb != new_plane_state->fb ||
+		(crtc_state && drm_atomic_crtc_needs_modeset(crtc_state));
 
 	return drm_atomic_helper_check_plane_state(new_plane_state, crtc_state,
 						   DRM_PLANE_NO_SCALING,
@@ -445,7 +448,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9132, 0xff, 0x00, 0x00) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9133, 0xff, 0x00, 0x00) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x345f, 0x9135, 0xff, 0x00, 0x00) },
-	{},
+	{ }
 };
 MODULE_DEVICE_TABLE(usb, id_table);
 
