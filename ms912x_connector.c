@@ -6,6 +6,7 @@
 #include <drm/drm_connector.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_encoder.h>
+#include <drm/drm_modes.h>
 #include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_print.h>
@@ -23,6 +24,8 @@ static int ms912x_get_connector_type(struct ms912x_device *ms912x)
 		ms912x->port_type = MS912X_VIDEO_PORT_UNKNOWN;
 		return DRM_MODE_CONNECTOR_Unknown;
 	}
+	drm_info(&ms912x->drm,
+			 "video port type: %d\n", port_type);
 
 	ms912x->port_type = port_type;
 
@@ -148,32 +151,48 @@ ms912x_add_default_hdmi_vga_modes(struct drm_connector *connector)
 	return count;
 }
 
+static int ms912x_add_custom_mode(struct drm_connector *connector)
+{
+	struct ms912x_device *ms912x = to_ms912x(connector->dev);
+	struct drm_display_mode *mode;
+	unsigned int i;
+	int count = 0;
+
+	for (i = 0; i < ms912x->num_custom_modes; i++) {
+		mode = drm_mode_duplicate(
+			connector->dev,
+			&ms912x->custom_modes[i].display_mode);
+		if (!mode)
+			continue;
+
+		drm_mode_probed_add(connector, mode);
+		count++;
+	}
+
+	return count;
+}
+
 static int ms912x_connector_get_modes(struct drm_connector *connector)
 {
 	struct ms912x_device *ms912x = to_ms912x(connector->dev);
 	const struct drm_edid *edid;
-	int ret;
+	int ret = ms912x_add_custom_mode(connector);
 
 	if (ms912x->port_type == MS912X_VIDEO_PORT_CVBS ||
 	    ms912x->port_type == MS912X_VIDEO_PORT_SVIDEO ||
 	    ms912x->port_type == MS912X_VIDEO_PORT_CVBS_SVIDEO ||
 	    ms912x->port_type == MS912X_VIDEO_PORT_UNKNOWN)
-		return ms912x_add_cvbs_svideo_modes(connector);
+		return ret + ms912x_add_cvbs_svideo_modes(connector);
 
 	if (ms912x->port_type == MS912X_VIDEO_PORT_YPBPR)
-		return ms912x_add_ypbpr_modes(connector);
+		return ret + ms912x_add_ypbpr_modes(connector);
 
 	edid = drm_edid_read_custom(connector, ms912x_read_edid, ms912x);
 	if (!edid)
-		return ms912x_add_default_hdmi_vga_modes(connector);
+		return ret + ms912x_add_default_hdmi_vga_modes(connector);
 
-	ret = drm_edid_connector_update(connector, edid);
-	if (ret < 0) {
-		ret = 0;
-		goto edid_free;
-	}
-	ret = drm_edid_connector_add_modes(connector);
-edid_free:
+	if (drm_edid_connector_update(connector, edid) >= 0)
+		ret += drm_edid_connector_add_modes(connector);
 	drm_edid_free(edid);
 	return ret;
 }

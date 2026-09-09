@@ -69,11 +69,6 @@ ms912x_mode_config_helper_funcs = {
 	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
 };
 
-#define MS912X_MAX_WIDTH 1920
-#define MS912X_MAX_HEIGHT 1200
-#define MS912X_MAX_TRANSFER_LEN \
-	(MS912X_MAX_WIDTH * MS912X_MAX_HEIGHT * 2 + MS912X_FRAME_OVERHEAD)
-
 static const struct ms912x_mode ms912x_mode_list[] = {
 	/* Found in captures of the Windows driver and dumped from device */
 	MS912X_MODE(720, 480, 60, 0x02), /* 60.00 Hz */
@@ -105,12 +100,23 @@ static const struct ms912x_mode ms912x_mode_list[] = {
 };
 
 static const struct ms912x_mode *
-ms912x_get_mode(const struct drm_display_mode *mode)
+ms912x_get_mode(struct ms912x_device *ms912x,
+		const struct drm_display_mode *mode)
 {
 	unsigned int i;
 	int width = mode->hdisplay;
 	int height = mode->vdisplay;
 	int hz = drm_mode_vrefresh(mode);
+
+	for (i = 0; i < ms912x->num_custom_modes; i++) {
+		const struct ms912x_mode *custom_mode =
+			&ms912x->custom_modes[i].mode;
+
+		if (custom_mode->width == width &&
+		    custom_mode->height == height &&
+		    custom_mode->hz == hz)
+			return custom_mode;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(ms912x_mode_list); i++) {
 		if (ms912x_mode_list[i].width == width &&
@@ -138,7 +144,7 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 		return;
 	}
 
-	ms_mode = ms912x_get_mode(&crtc_state->mode);
+	ms_mode = ms912x_get_mode(ms912x, &crtc_state->mode);
 	if (!ms_mode) {
 		drm_err(dev, "unsupported mode passed to CRTC enable\n");
 		return;
@@ -178,7 +184,8 @@ static enum drm_mode_status
 ms912x_crtc_mode_valid(struct drm_crtc *crtc,
 		       const struct drm_display_mode *mode)
 {
-	const struct ms912x_mode *ms_mode = ms912x_get_mode(mode);
+	struct ms912x_device *ms912x = to_ms912x(crtc->dev);
+	const struct ms912x_mode *ms_mode = ms912x_get_mode(ms912x, mode);
 
 	if (!ms_mode)
 		return MODE_BAD;
@@ -314,6 +321,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 			    const struct usb_device_id *id)
 {
 	int ret;
+	unsigned int i;
 	struct ms912x_device *ms912x;
 	struct drm_device *dev;
 	struct device *dma_dev;
@@ -331,6 +339,19 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	if (!usb_check_bulk_endpoints(interface, ms912x_bulk_out_endpoints))
 		return -ENXIO;
+
+	ret = ms912x_read_custom_timing(ms912x);
+	if (ret < 0) {
+		drm_warn(&ms912x->drm,
+			 "failed to read custom timing: %d\n", ret);
+	}
+	for (i = 0; i < ms912x->num_custom_modes; i++) {
+		const struct ms912x_mode *mode = &ms912x->custom_modes[i].mode;
+
+		drm_info(&ms912x->drm,
+			 "custom mode %dx%d@%d uses mode 0x%02x\n",
+			 mode->width, mode->height, mode->hz, mode->mode);
+	}
 
 	usbdev = interface_to_usbdev(interface);
 	ms912x->bulk_pipe =
