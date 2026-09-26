@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/completion.h>
+#include <linux/debugfs.h>
+#include <linux/jiffies.h>
 #include <linux/limits.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -97,6 +99,7 @@ static const struct ms912x_mode ms912x_mode_list[] = {
 	MS912X_MODE(1600, 1200, 60, 0x73), /* 60.00 Hz */
 	MS912X_MODE(1680, 1050, 60, 0x78), /* 59.95 Hz */
 	MS912X_MODE(1920, 1080, 60, 0x81), /* 60.00 Hz */
+	MS912X_MODE(1024, 600, 60, 0x96), /* 60.00 Hz, native panel 7" 345f:9132 */
 };
 
 static const struct ms912x_mode *
@@ -151,8 +154,21 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	}
 
 	ret = ms912x_set_resolution(ms912x, ms_mode);
-	if (ret)
+	if (ret) {
 		drm_err(dev, "failed to set display mode: %d\n", ret);
+		return;
+	}
+
+	/* The screen stays muted until the first frame has been
+	 * transferred; the worker unmutes it then. Also kick the idle
+	 * keepalive that resends the last frame so the panel does
+	 * not blank when idle.
+	 */
+	ms912x->screen_muted = true;
+	ms912x->has_frame = false;
+	schedule_delayed_work(&ms912x->idle_work,
+			      msecs_to_jiffies(ms912x->idle_refresh_ms ?
+					       ms912x->idle_refresh_ms : 2500));
 }
 
 static void ms912x_cancel_transfer_work(struct ms912x_device *ms912x)
@@ -175,6 +191,20 @@ static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
 	int ret;
 
 	ms912x_cancel_transfer_work(ms912x);
+	cancel_delayed_work_sync(&ms912x->idle_work);
+	ms912x->has_frame = false;
+	/* Official disable order: transfer, video, screen, power.
+	 * -ENODEV just means the device is already gone (unplug).
+	 */
+	ret = ms912x_trans_enable(ms912x, 0);
+	if (ret && ret != -ENODEV)
+		drm_err(dev, "failed to disable transfer: %d\n", ret);
+	ret = ms912x_video_enable(ms912x, 0);
+	if (ret && ret != -ENODEV)
+		drm_err(dev, "failed to disable video: %d\n", ret);
+	ret = ms912x_screen_enable(ms912x, 0);
+	if (ret && ret != -ENODEV)
+		drm_err(dev, "failed to disable screen: %d\n", ret);
 	ret = ms912x_power_off(ms912x);
 	if (ret && ret != -ENODEV)
 		drm_err(dev, "failed to power off display: %d\n", ret);
@@ -333,9 +363,23 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		return PTR_ERR(ms912x);
 
 	ms912x->intf = interface;
+	/* Same 2500 ms the official driver uses between idle resends.
+	 * Lower it through debugfs (e.g. to 1000) if the panel still
+	 * flickers at 2500: some units blank sooner when idle.
+	 */
+	ms912x->idle_refresh_ms = 2500;
+	/* Muted until the first successfully transferred frame unmutes
+	 * it: this also covers the replug case, where the compositor
+	 * may resume flipping without a fresh modeset.
+	 */
+	ms912x->screen_muted = true;
 	ret = devm_mutex_init(&interface->dev, &ms912x->ctrl_lock);
 	if (ret)
 		return ret;
+	ret = devm_mutex_init(&interface->dev, &ms912x->update_lock);
+	if (ret)
+		return ret;
+	INIT_DELAYED_WORK(&ms912x->idle_work, ms912x_idle_work);
 
 	if (!usb_check_bulk_endpoints(interface, ms912x_bulk_out_endpoints))
 		return -ENXIO;
@@ -379,6 +423,14 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	/* This stops weird behavior in the device */
 	ret = ms912x_set_resolution(ms912x, &ms912x_mode_list[0]);
+	if (ret)
+		return ret;
+
+	/* Power the chip here, not only at modeset: after a physical
+	 * replug the compositor may resume flipping without a fresh
+	 * modeset, and bulk transfers time out on an unpowered chip.
+	 */
+	ret = ms912x_power_on(ms912x);
 	if (ret)
 		return ret;
 
@@ -430,6 +482,15 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		goto err_free_request_1;
 
+	/* Live tuning for the idle keepalive (ms, 0 disables). The DRM
+	 * core removes this automatically on unregister; no module
+	 * parameter, per upstream policy.
+	 */
+	if (dev->debugfs_root)
+		debugfs_create_u32("ms912x_idle_ms", 0600,
+				   dev->debugfs_root,
+				   &ms912x->idle_refresh_ms);
+
 	drm_client_setup(dev, NULL);
 
 	return 0;
@@ -446,9 +507,17 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	struct ms912x_device *ms912x = usb_get_intfdata(interface);
 	struct drm_device *dev = &ms912x->drm;
 
+	ms912x_cancel_transfer_work(ms912x);
+	cancel_delayed_work_sync(&ms912x->idle_work);
+	/* Drop the connector so compositors forget the output instead
+	 * of keeping a ghost: without this, replugging never triggers
+	 * a fresh modeset and the panel stays black (no unmute).
+	 * Unregister is idempotent, release cleans up the rest.
+	 */
+	drm_connector_unregister(&ms912x->connector);
+	drm_kms_helper_hotplug_event(dev);
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
-	ms912x_cancel_transfer_work(ms912x);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
 }

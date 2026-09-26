@@ -6,8 +6,6 @@
 #include <linux/bits.h>
 #include <linux/completion.h>
 #include <linux/mutex.h>
-#include <linux/scatterlist.h>
-#include <linux/timer_types.h>
 #include <linux/types.h>
 #include <linux/usb.h>
 #include <linux/workqueue.h>
@@ -33,6 +31,14 @@
 #define MS912X_REQ_TYPE_WRITE_6_BYTES	0xa6
 #define MS912X_REQ_TYPE_READ_BYTE	0xb5
 #define MS912X_REQ_TYPE_READ_FLASH	0xf5
+#define MS912X_REQ_TYPE_WRITE_BYTE	0xb6
+
+/* Screen-unmute xdata register (official sequence): the panel stays
+ * black until the screen is enabled AFTER the first frame has been
+ * transferred. Only the 912X+DIGITAL combination is handled.
+ */
+#define MS912X_XDATA_SCREEN_912X_DIGITAL	0xf005
+#define MS912X_SCREEN_ENABLE_BIT		0x10
 
 #define MS912X_REG_VIDEO_PORT		0x0031
 #define MS912X_REG_DISPLAY_STATUS	0x0032
@@ -44,8 +50,8 @@
 
 #define MS912X_CMD_RESOLUTION		0x01
 #define MS912X_CMD_MODE			0x02
-#define MS912X_CMD_UNKNOWN1		0x03
-#define MS912X_CMD_UNKNOWN2		0x04
+#define MS912X_CMD_TRANS_MODE		0x03
+#define MS912X_CMD_TRANSFER		0x04
 #define MS912X_CMD_OUTPUT_ENABLE	0x05
 #define MS912X_CMD_POWER		0x07
 
@@ -78,10 +84,7 @@ struct ms912x_usb_request {
 	void *transfer_buffer;
 	struct ms912x_device *ms912x;
 	size_t transfer_len;
-	struct sg_table transfer_sgt;
-	struct usb_sg_request sgr;
 	struct work_struct work;
-	struct timer_list timer;
 	struct completion done;
 };
 
@@ -124,6 +127,25 @@ struct ms912x_device {
 	unsigned int num_custom_modes;
 
 	struct drm_rect update_rect;
+
+	/* The screen stays muted until it is enabled after the first
+	 * successfully transferred frame (official sequence). Set at
+	 * modeset, cleared by the transfer worker.
+	 */
+	bool screen_muted;
+
+	/* Idle keepalive: the 912C firmware blanks the panel when no
+	 * bulk traffic arrives for a while, so resend the last frame.
+	 */
+	struct delayed_work idle_work;
+	struct mutex update_lock;
+	bool has_frame;
+	unsigned long last_send;
+	int last_request;
+	/* Resend interval in ms (default 2500, 0 disables); tuned live
+	 * through debugfs, no module parameter (upstream policy).
+	 */
+	unsigned int idle_refresh_ms;
 
 	/* Double buffer to allow memcpy and transfer
 	 * to happen in parallel
@@ -201,6 +223,9 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
+int ms912x_screen_enable(struct ms912x_device *ms912x, u8 enable);
+int ms912x_trans_enable(struct ms912x_device *ms912x, u8 enable);
+int ms912x_video_enable(struct ms912x_device *ms912x, u8 enable);
 
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 			struct drm_format_conv_state *fmtcnv_state,
@@ -209,4 +234,5 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 void ms912x_free_request(struct ms912x_usb_request *request);
 int ms912x_init_request(struct ms912x_device *ms912x,
 			struct ms912x_usb_request *request, size_t len);
+void ms912x_idle_work(struct work_struct *work);
 #endif
