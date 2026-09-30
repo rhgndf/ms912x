@@ -4,7 +4,6 @@
 #define MS912X_H
 
 #include <linux/bits.h>
-#include <linux/completion.h>
 #include <linux/mutex.h>
 #include <linux/scatterlist.h>
 #include <linux/timer_types.h>
@@ -82,7 +81,6 @@ struct ms912x_usb_request {
 	struct usb_sg_request sgr;
 	struct work_struct work;
 	struct timer_list timer;
-	struct completion done;
 };
 
 struct ms912x_mode {
@@ -123,13 +121,17 @@ struct ms912x_device {
 	struct ms912x_custom_mode custom_modes[2];
 	unsigned int num_custom_modes;
 
-	struct drm_rect update_rect;
+	/* Protects shadow*, dirty_rect, sent_rect, fb_width and fb_height */
+	struct mutex shadow_lock;
+	/* XRGB copy of the screen, sent to the device by request.work */
+	void *shadow;
+	bool shadow_valid;
+	struct drm_rect dirty_rect;
+	struct drm_rect sent_rect;
+	int fb_width;
+	int fb_height;
 
-	/* Double buffer to allow memcpy and transfer
-	 * to happen in parallel
-	 */
-	int current_request;
-	struct ms912x_usb_request requests[2];
+	struct ms912x_usb_request request;
 };
 
 struct ms912x_request {
@@ -191,6 +193,9 @@ struct ms912x_custom_timing_record {
 #define MS912X_MAX_TRANSFER_LEN \
 	(MS912X_MAX_WIDTH * MS912X_MAX_HEIGHT * 2 + MS912X_FRAME_OVERHEAD)
 
+#define MS912X_SHADOW_PITCH (MS912X_MAX_WIDTH * 4)
+#define MS912X_SHADOW_SIZE (MS912X_SHADOW_PITCH * MS912X_MAX_HEIGHT)
+
 #define to_ms912x(x) container_of(x, struct ms912x_device, drm)
 
 int ms912x_read_byte(struct ms912x_device *ms912x, u16 address);
@@ -202,6 +207,7 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
 
+void ms912x_clear_rect(struct drm_rect *rect);
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 			struct drm_format_conv_state *fmtcnv_state,
 			struct drm_rect *rect);

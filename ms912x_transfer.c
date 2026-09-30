@@ -2,13 +2,14 @@
 
 #include <asm/byteorder.h>
 #include <linux/align.h>
-#include <linux/completion.h>
 #include <linux/container_of.h>
 #include <linux/dma-direction.h>
 #include <linux/iosys-map.h>
 #include <linux/jiffies.h>
+#include <linux/limits.h>
 #include <linux/math.h>
 #include <linux/minmax.h>
+#include <linux/mutex.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -33,20 +34,55 @@ static void ms912x_request_timeout(struct timer_list *t)
 	usb_sg_cancel(&request->sgr);
 }
 
-static void ms912x_request_work(struct work_struct *work)
+static const u8 ms912x_end_of_buffer[] = { 0xff, 0xc0, 0x00, 0x00,
+				    0x00, 0x00, 0x00, 0x00 };
+
+void ms912x_clear_rect(struct drm_rect *rect)
 {
-	struct ms912x_usb_request *request =
-		container_of(work, struct ms912x_usb_request, work);
+	rect->x1 = INT_MAX;
+	rect->y1 = INT_MAX;
+	rect->x2 = 0;
+	rect->y2 = 0;
+}
+
+static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
+				       const __le32 *temp_buffer, size_t width);
+
+/* Converts rect from the shadow buffer into a frame update. Returns its size. */
+static size_t ms912x_fill_transfer(void *dst, const void *shadow,
+				   const struct drm_rect *rect)
+{
+	struct ms912x_frame_update_header *header = dst;
+	int y, width = drm_rect_width(rect), height = drm_rect_height(rect);
+	u32 position, dimensions;
+
+	header->marker = cpu_to_be16(0xff00);
+	position = ((rect->x1 & 0xfff) << 12) | (rect->y1 & 0xfff);
+	dimensions = ((width & 0xfff) << 12) | (height & 0xfff);
+	put_unaligned_be24(position, header->position);
+	put_unaligned_be24(dimensions, header->dimensions);
+	dst += sizeof(*header);
+
+	for (y = rect->y1; y < rect->y2; y++) {
+		ms912x_xrgb_to_yuv422_line(dst, shadow + y * MS912X_SHADOW_PITCH +
+					   rect->x1 * 4, width);
+		dst += width * 2;
+	}
+
+	memcpy(dst, ms912x_end_of_buffer, sizeof(ms912x_end_of_buffer));
+	return width * 2 * height + MS912X_FRAME_OVERHEAD;
+}
+
+static int ms912x_send_request(struct ms912x_usb_request *request)
+{
 	struct ms912x_device *ms912x = request->ms912x;
 	struct usb_device *usbdev = interface_to_usbdev(ms912x->intf);
 	struct usb_sg_request *sgr = &request->sgr;
 	struct sg_table *transfer_sgt = &request->transfer_sgt;
 	int idx, ret;
 
-	if (!drm_dev_enter(&ms912x->drm, &idx)) {
-		ret = -ENODEV;
-		goto complete;
-	}
+	if (!drm_dev_enter(&ms912x->drm, &idx))
+		return -ENODEV;
 
 	ret = usb_sg_init(sgr, usbdev, ms912x->bulk_pipe, 0, transfer_sgt->sgl,
 			  transfer_sgt->nents, request->transfer_len,
@@ -66,11 +102,55 @@ static void ms912x_request_work(struct work_struct *work)
 
 dev_exit:
 	drm_dev_exit(idx);
-complete:
-	if (ret < 0 && ret != -ENODEV)
-		drm_err_ratelimited(&ms912x->drm,
-				    "failed to send framebuffer: %d\n", ret);
-	complete(&request->done);
+	return ret;
+}
+
+/*
+ * Sends damage accumulated in the shadow buffer until there is none left.
+ * Damage arriving during a transfer is merged and sent by the next loop, so
+ * nothing is dropped and the compositor never waits on USB.
+ */
+static void ms912x_request_work(struct work_struct *work)
+{
+	struct ms912x_usb_request *request =
+		container_of(work, struct ms912x_usb_request, work);
+	struct ms912x_device *ms912x = request->ms912x;
+	struct drm_rect rect;
+	int ret;
+
+	for (;;) {
+		mutex_lock(&ms912x->shadow_lock);
+		if (drm_rect_width(&ms912x->dirty_rect) <= 0 ||
+		    drm_rect_height(&ms912x->dirty_rect) <= 0) {
+			mutex_unlock(&ms912x->shadow_lock);
+			return;
+		}
+
+		/*
+		 * The device double buffers, so also resend the last rect.
+		 * UYVY stores pixels in pairs, so expand to complete pairs.
+		 */
+		rect.x1 = ALIGN_DOWN(min(ms912x->dirty_rect.x1,
+					 ms912x->sent_rect.x1), 2);
+		rect.y1 = min(ms912x->dirty_rect.y1, ms912x->sent_rect.y1);
+		rect.x2 = min_t(int, ALIGN(max(ms912x->dirty_rect.x2,
+					       ms912x->sent_rect.x2), 2),
+				ms912x->fb_width);
+		rect.y2 = min(max(ms912x->dirty_rect.y2, ms912x->sent_rect.y2),
+			      ms912x->fb_height);
+		ms912x->sent_rect = ms912x->dirty_rect;
+		ms912x_clear_rect(&ms912x->dirty_rect);
+
+		request->transfer_len = ms912x_fill_transfer(
+			request->transfer_buffer, ms912x->shadow, &rect);
+		mutex_unlock(&ms912x->shadow_lock);
+
+		ret = ms912x_send_request(request);
+		if (ret < 0 && ret != -ENODEV)
+			drm_err_ratelimited(&ms912x->drm,
+					    "failed to send framebuffer: %d\n",
+					    ret);
+	}
 }
 
 void ms912x_free_request(struct ms912x_usb_request *request)
@@ -115,8 +195,6 @@ int ms912x_init_request(struct ms912x_device *ms912x,
 	request->transfer_buffer = data;
 	request->ms912x = ms912x;
 
-	init_completion(&request->done);
-	complete(&request->done);
 	timer_setup(&request->timer, ms912x_request_timeout, 0);
 	INIT_WORK(&request->work, ms912x_request_work);
 	return 0;
@@ -151,16 +229,13 @@ static inline unsigned int ms912x_rgb_to_v(unsigned int r, unsigned int g,
 }
 
 static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
-				       const struct iosys_map *xrgb_buffer,
-				       size_t offset, size_t width,
-				       __le32 *temp_buffer)
+				       const __le32 *temp_buffer, size_t width)
 {
 	unsigned int i, dst_offset = 0;
 	unsigned int pixel1, pixel2;
 	unsigned int r1, g1, b1, r2, g2, b2;
 	unsigned int v, y1, u, y2;
 
-	iosys_map_memcpy_from(temp_buffer, xrgb_buffer, offset, width * 4);
 	for (i = 0; i < width; i += 2) {
 		pixel1 = le32_to_cpup(&temp_buffer[i]);
 		pixel2 = le32_to_cpup(&temp_buffer[i + 1]);
@@ -189,99 +264,76 @@ static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
 	}
 }
 
-static const u8 ms912x_end_of_buffer[] = { 0xff, 0xc0, 0x00, 0x00,
-				    0x00, 0x00, 0x00, 0x00 };
-
-static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
-					const struct iosys_map *src,
-					struct drm_framebuffer *fb,
-					const struct drm_rect *rect,
-					struct drm_format_conv_state *fmtcnv_state)
-{
-	struct ms912x_frame_update_header *header = dst;
-	struct iosys_map fb_map;
-	u32 position, dimensions;
-	int i, x, y1, y2, width;
-	__le32 *temp_buffer;
-
-	y1 = rect->y1;
-	y2 = min_t(unsigned int, rect->y2, fb->height);
-	x = rect->x1;
-	width = drm_rect_width(rect);
-
-	temp_buffer = drm_format_conv_state_reserve(fmtcnv_state,
-						    width * sizeof(*temp_buffer),
-						    GFP_KERNEL);
-	if (!temp_buffer)
-		return -ENOMEM;
-
-	header->marker = cpu_to_be16(0xff00);
-	position = ((x & 0xfff) << 12) | (y1 & 0xfff);
-	dimensions = ((width & 0xfff) << 12) |
-		     (drm_rect_height(rect) & 0xfff);
-	put_unaligned_be24(position, header->position);
-	put_unaligned_be24(dimensions, header->dimensions);
-	dst += sizeof(*header);
-
-	fb_map = IOSYS_MAP_INIT_OFFSET(src, y1 * fb->pitches[0]);
-	for (i = y1; i < y2; i++) {
-		ms912x_xrgb_to_yuv422_line(dst, &fb_map, x * 4, width,
-					   temp_buffer);
-		iosys_map_incr(&fb_map, fb->pitches[0]);
-		dst += width * 2;
-	}
-
-	memcpy(dst, ms912x_end_of_buffer, sizeof(ms912x_end_of_buffer));
-	return 0;
-}
-
+/*
+ * Copies damage into the shadow buffer and marks what really changed as dirty.
+ * Clients often report the whole window as damaged for a few changed pixels,
+ * and every byte counts on USB 2.
+ */
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 			struct drm_format_conv_state *fmtcnv_state,
 			struct drm_rect *rect)
 {
-	int ret = 0, idx;
 	struct ms912x_device *ms912x = to_ms912x(fb->dev);
-	struct drm_device *drm = &ms912x->drm;
-	struct ms912x_usb_request *current_request;
-	int x, width;
+	struct drm_rect *dirty = &ms912x->dirty_rect;
+	struct drm_rect changed;
+	struct iosys_map fb_map;
+	__le32 *line, *old;
+	int ret, y, l, r, width;
 
-	/* UYVY stores pixels in pairs. Expand damage to a complete pair. */
-	x = ALIGN_DOWN(rect->x1, 2);
-	width = min_t(int, ALIGN(rect->x2, 2), fb->width) - x;
-	rect->x1 = x;
-	rect->x2 = x + width;
-	current_request = &ms912x->requests[ms912x->current_request];
+	rect->x2 = min_t(int, rect->x2, fb->width);
+	rect->y2 = min_t(int, rect->y2, fb->height);
+	width = drm_rect_width(rect);
+	if (width <= 0)
+		return 0;
 
-	if (!drm_dev_enter(drm, &idx))
-		return -ENODEV;
-
-	/* Transfer buffer still in use, drop this frame. */
-	if (!wait_for_completion_timeout(&current_request->done,
-					 msecs_to_jiffies(10))) {
-		ret = -ETIMEDOUT;
-		goto dev_exit;
-	}
+	line = drm_format_conv_state_reserve(fmtcnv_state,
+					     width * sizeof(*line), GFP_KERNEL);
+	if (!line)
+		return -ENOMEM;
 
 	ret = drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE);
 	if (ret < 0)
-		goto request_complete;
+		return ret;
 
-	ret = ms912x_fb_xrgb8888_to_yuv422(current_request->transfer_buffer,
-					   map, fb, rect, fmtcnv_state);
+	ms912x_clear_rect(&changed);
+	mutex_lock(&ms912x->shadow_lock);
+	fb_map = IOSYS_MAP_INIT_OFFSET(map, rect->y1 * fb->pitches[0]);
+	for (y = rect->y1; y < rect->y2; y++) {
+		iosys_map_memcpy_from(line, &fb_map, rect->x1 * 4, width * 4);
+		iosys_map_incr(&fb_map, fb->pitches[0]);
+		old = ms912x->shadow + y * MS912X_SHADOW_PITCH + rect->x1 * 4;
+
+		/* After a mode set the device content is unknown, send all. */
+		if (ms912x->shadow_valid) {
+			if (!memcmp(line, old, width * 4))
+				continue;
+			for (l = 0; line[l] == old[l]; l++)
+				;
+			for (r = width; line[r - 1] == old[r - 1]; r--)
+				;
+		} else {
+			l = 0;
+			r = width;
+		}
+
+		memcpy(old + l, line + l, (r - l) * 4);
+		changed.x1 = min(changed.x1, rect->x1 + l);
+		changed.x2 = max(changed.x2, rect->x1 + r);
+		changed.y1 = min(changed.y1, y);
+		changed.y2 = y + 1;
+	}
+	ms912x->shadow_valid = true;
+
+	dirty->x1 = min(dirty->x1, changed.x1);
+	dirty->y1 = min(dirty->y1, changed.y1);
+	dirty->x2 = max(dirty->x2, changed.x2);
+	dirty->y2 = max(dirty->y2, changed.y2);
+	ms912x->fb_width = fb->width;
+	ms912x->fb_height = fb->height;
+	mutex_unlock(&ms912x->shadow_lock);
 
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
-	if (ret < 0)
-		goto request_complete;
-
-	current_request->transfer_len =
-		width * 2 * drm_rect_height(rect) + MS912X_FRAME_OVERHEAD;
-	queue_work(ms912x->workqueue, &current_request->work);
-	ms912x->current_request = 1 - ms912x->current_request;
-	goto dev_exit;
-
-request_complete:
-	complete(&current_request->done);
-dev_exit:
-	drm_dev_exit(idx);
-	return ret;
+	if (changed.y2)
+		queue_work(ms912x->workqueue, &ms912x->request.work);
+	return 0;
 }
