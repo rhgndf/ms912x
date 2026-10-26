@@ -5,6 +5,7 @@
 
 #include <linux/bits.h>
 #include <linux/completion.h>
+#include <linux/limits.h>
 #include <linux/mutex.h>
 #include <linux/scatterlist.h>
 #include <linux/timer_types.h>
@@ -22,6 +23,8 @@
 #include <drm/drm_plane.h>
 #include <drm/drm_rect.h>
 
+struct drm_edid;
+
 #define DRIVER_NAME "ms912x"
 #define DRIVER_DESC "MacroSilicon USB to VGA/HDMI"
 
@@ -37,6 +40,9 @@
 #define MS912X_REG_VIDEO_PORT		0x0031
 #define MS912X_REG_DISPLAY_STATUS	0x0032
 #define MS912X_REG_EDID_BASE		0xc000
+
+#define MS912X_XDATA_ADDR_MAX		U16_MAX
+#define MS912X_XDATA_SIZE		(MS912X_XDATA_ADDR_MAX + 1U)
 
 #define MS912X_REG_MODE_SEQUENCE_0	0x0030
 #define MS912X_REG_MODE_SEQUENCE_1	0x0033
@@ -106,6 +112,12 @@ struct ms912x_custom_mode {
 		.width = w, .height = h, .hz = z, .mode = m                    \
 	}
 
+enum ms912x_edid_state {
+	MS912X_EDID_NONE,
+	MS912X_EDID_VALID,
+	MS912X_EDID_FAILED,
+};
+
 struct ms912x_device {
 	struct drm_device drm;
 	struct usb_interface *intf;
@@ -124,6 +136,17 @@ struct ms912x_device {
 	unsigned int num_custom_modes;
 
 	struct drm_rect update_rect;
+
+	/* Polls HPD status ourselves instead of letting DRM core poll the
+	 * connector.  EDID is read asynchronously before a connect event
+	 * is reported, so userspace never blocks on the slow HID bus.
+	 */
+	struct delayed_work hpd_work;
+	struct mutex hpd_lock;
+	enum drm_connector_status hpd_status;
+	const struct drm_edid *edid;
+	enum ms912x_edid_state edid_state;
+	bool hpd_enabled;
 
 	/* Double buffer to allow memcpy and transfer
 	 * to happen in parallel
@@ -194,8 +217,13 @@ struct ms912x_custom_timing_record {
 #define to_ms912x(x) container_of(x, struct ms912x_device, drm)
 
 int ms912x_read_byte(struct ms912x_device *ms912x, u16 address);
+int ms912x_read_bytes(struct ms912x_device *ms912x, u16 address, void *buf,
+		      size_t len);
 int ms912x_read_custom_timing(struct ms912x_device *ms912x);
 int ms912x_connector_init(struct ms912x_device *ms912x);
+void ms912x_hpd_work(struct work_struct *work);
+void ms912x_hpd_start(struct ms912x_device *ms912x);
+void ms912x_hpd_stop(struct ms912x_device *ms912x);
 int ms912x_set_resolution(struct ms912x_device *ms912x,
 			  const struct ms912x_mode *mode);
 

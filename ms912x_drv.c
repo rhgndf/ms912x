@@ -27,19 +27,35 @@
 
 #include "ms912x.h"
 
+static void ms912x_hpd_cleanup(void *data)
+{
+	ms912x_hpd_stop(data);
+}
+
 static int ms912x_usb_suspend(struct usb_interface *interface,
 			      pm_message_t message)
 {
 	struct ms912x_device *ms912x = usb_get_intfdata(interface);
+	int ret;
 
-	return drm_mode_config_helper_suspend(&ms912x->drm);
+	ms912x_hpd_stop(ms912x);
+	ret = drm_mode_config_helper_suspend(&ms912x->drm);
+	if (ret)
+		ms912x_hpd_start(ms912x);
+
+	return ret;
 }
 
 static int ms912x_usb_resume(struct usb_interface *interface)
 {
 	struct ms912x_device *ms912x = usb_get_intfdata(interface);
+	int ret;
 
-	return drm_mode_config_helper_resume(&ms912x->drm);
+	ret = drm_mode_config_helper_resume(&ms912x->drm);
+	if (!ret)
+		ms912x_hpd_start(ms912x);
+
+	return ret;
 }
 
 DEFINE_DRM_GEM_FOPS(ms912x_driver_fops);
@@ -337,6 +353,21 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		return ret;
 
+	ret = devm_mutex_init(&interface->dev, &ms912x->hpd_lock);
+	if (ret)
+		return ret;
+
+	INIT_DELAYED_WORK(&ms912x->hpd_work, ms912x_hpd_work);
+	ms912x->hpd_status = connector_status_unknown;
+	ms912x->edid = NULL;
+	ms912x->edid_state = MS912X_EDID_NONE;
+	ms912x->hpd_enabled = false;
+
+	ret = devm_add_action_or_reset(&interface->dev, ms912x_hpd_cleanup,
+				       ms912x);
+	if (ret)
+		return ret;
+
 	if (!usb_check_bulk_endpoints(interface, ms912x_bulk_out_endpoints))
 		return -ENXIO;
 
@@ -424,13 +455,14 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 
 	usb_set_intfdata(interface, ms912x);
 
-	drmm_kms_helper_poll_init(dev);
-
 	ret = drm_dev_register(dev, 0);
 	if (ret)
 		goto err_free_request_1;
 
 	drm_client_setup(dev, NULL);
+
+	/* HPD is polled by the driver, not by DRM core. */
+	ms912x_hpd_start(ms912x);
 
 	return 0;
 
@@ -447,6 +479,7 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 	struct drm_device *dev = &ms912x->drm;
 
 	drm_dev_unplug(dev);
+	ms912x_hpd_stop(ms912x);
 	drm_atomic_helper_shutdown(dev);
 	ms912x_cancel_transfer_work(ms912x);
 	ms912x_free_request(&ms912x->requests[0]);
@@ -457,6 +490,7 @@ static void ms912x_usb_shutdown(struct usb_interface *interface)
 {
 	struct ms912x_device *ms912x = usb_get_intfdata(interface);
 
+	ms912x_hpd_stop(ms912x);
 	drm_atomic_helper_shutdown(&ms912x->drm);
 }
 

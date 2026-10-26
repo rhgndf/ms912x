@@ -2,6 +2,7 @@
 
 #include <asm/byteorder.h>
 #include <linux/hid.h>
+#include <linux/minmax.h>
 #include <linux/mutex.h>
 #include <linux/string.h>
 #include <linux/usb.h>
@@ -11,42 +12,84 @@
 
 #include "ms912x.h"
 
-int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
+/*
+ * The XDATA read request returns up to four bytes in one response.
+ * Read in four-byte chunks instead of issuing one request per byte.
+ */
+int ms912x_read_bytes(struct ms912x_device *ms912x, u16 address, void *buf,
+		      size_t len)
 {
 	struct ms912x_request request;
 	struct usb_device *usb_dev;
-	int idx, ret;
+	u8 *dst = buf;
+	int idx, ret = 0;
 
-	if (!drm_dev_enter(&ms912x->drm, &idx))
-		return -ENODEV;
+	if (!len)
+		return 0;
 
-	mutex_lock(&ms912x->ctrl_lock);
+	if (len > MS912X_XDATA_SIZE - address)
+		return -ERANGE;
 
 	usb_dev = interface_to_usbdev(ms912x->intf);
-	memset(&request, 0, sizeof(request));
-	request.type = MS912X_REQ_TYPE_READ_BYTE;
-	request.addr = cpu_to_be16(address);
 
-	ret = usb_control_msg_send(usb_dev, 0, HID_REQ_SET_REPORT,
-				   USB_DIR_OUT | USB_TYPE_CLASS |
-					   USB_RECIP_INTERFACE,
-				   0x0300, 0, &request, sizeof(request),
-				   USB_CTRL_SET_TIMEOUT, GFP_KERNEL);
-	if (ret)
-		goto ctrl_unlock;
+	while (len) {
+		size_t chunk = min_t(size_t, len, 4);
 
-	ret = usb_control_msg_recv(usb_dev, 0, HID_REQ_GET_REPORT,
-				   USB_DIR_IN | USB_TYPE_CLASS |
-					   USB_RECIP_INTERFACE,
-				   0x0300, 0, &request, sizeof(request),
-				   USB_CTRL_GET_TIMEOUT, GFP_KERNEL);
-	if (!ret)
-		ret = request.data[0];
+		if (!drm_dev_enter(&ms912x->drm, &idx)) {
+			ret = -ENODEV;
+			break;
+		}
 
+		memset(&request, 0, sizeof(request));
+		request.type = MS912X_REQ_TYPE_READ_BYTE;
+		request.addr = cpu_to_be16(address);
+
+		/* Keep ctrl_lock per chunk so a concurrent modeset does
+		 * not wait for the whole transfer.
+		 */
+		mutex_lock(&ms912x->ctrl_lock);
+		ret = usb_control_msg_send(usb_dev, 0, HID_REQ_SET_REPORT,
+					   USB_DIR_OUT | USB_TYPE_CLASS |
+						   USB_RECIP_INTERFACE,
+					   0x0300, 0, &request,
+					   sizeof(request), USB_CTRL_SET_TIMEOUT,
+					   GFP_KERNEL);
+		if (ret)
+			goto ctrl_unlock;
+
+		ret = usb_control_msg_recv(usb_dev, 0, HID_REQ_GET_REPORT,
+					   USB_DIR_IN | USB_TYPE_CLASS |
+						   USB_RECIP_INTERFACE,
+					   0x0300, 0, &request,
+					   sizeof(request), USB_CTRL_GET_TIMEOUT,
+					   GFP_KERNEL);
+		if (ret)
+			goto ctrl_unlock;
+
+		memcpy(dst, request.data, chunk);
+		address += chunk;
+		dst += chunk;
+		len -= chunk;
 ctrl_unlock:
-	mutex_unlock(&ms912x->ctrl_lock);
-	drm_dev_exit(idx);
+		mutex_unlock(&ms912x->ctrl_lock);
+		drm_dev_exit(idx);
+		if (ret)
+			break;
+	}
+
 	return ret;
+}
+
+int ms912x_read_byte(struct ms912x_device *ms912x, u16 address)
+{
+	u8 data;
+	int ret;
+
+	ret = ms912x_read_bytes(ms912x, address, &data, 1);
+	if (ret)
+		return ret;
+
+	return data;
 }
 
 static int ms912x_read_flash(struct ms912x_device *ms912x, u32 address,
