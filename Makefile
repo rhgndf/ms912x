@@ -9,11 +9,11 @@ obj-m := ms912x.o
 KVER ?= $(shell uname -r)
 KSRC ?= /lib/modules/$(KVER)/build
 
-all:	modules
+all: modules
 
 modules:
-	make CHECK="/usr/bin/sparse" -C $(KSRC) M=$(PWD) modules
+	make CHECK="/usr/bin/sparse" -C $(KSRC) M=$(CURDIR) modules
 
 clean:
-	make -C $(KSRC) M=$(PWD) clean
-	rm -f $(PWD)/Module.symvers $(PWD)/*.ur-safe
+	make -C $(KSRC) M=$(CURDIR) clean
+	rm -f $(CURDIR)/Module.symvers $(CURDIR)/*.ur-safe
