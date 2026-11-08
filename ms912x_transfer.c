@@ -26,6 +26,15 @@
 
 #include "ms912x.h"
 
+static bool debug_transfers;
+module_param(debug_transfers, bool, 0644);
+MODULE_PARM_DESC(debug_transfers, "Log every framebuffer transfer (rect, length)");
+
+static unsigned int keepalive_ms = 500;
+module_param(keepalive_ms, uint, 0644);
+MODULE_PARM_DESC(keepalive_ms,
+		 "Resend the full frame after this many ms without updates (0 = off, default 500)");
+
 static void ms912x_request_timeout(struct timer_list *t)
 {
 	struct ms912x_usb_request *request = timer_container_of(request, t, timer);
@@ -67,9 +76,27 @@ static void ms912x_request_work(struct work_struct *work)
 dev_exit:
 	drm_dev_exit(idx);
 complete:
-	if (ret < 0 && ret != -ENODEV)
+	if (ret < 0 && ret != -ENODEV) {
+		int clr;
+
 		drm_err_ratelimited(&ms912x->drm,
-				    "failed to send framebuffer: %d\n", ret);
+				    "failed to send framebuffer: %d (rect " DRM_RECT_FMT
+				    ", len %zu, len%%512=%zu, sent %zu)\n",
+				    ret, DRM_RECT_ARG(&request->rect),
+				    request->transfer_len,
+				    request->transfer_len % 512, sgr->bytes);
+		/* Try to get the bulk endpoint out of a stalled/desynced state. */
+		clr = usb_clear_halt(interface_to_usbdev(ms912x->intf),
+				     ms912x->bulk_pipe);
+		if (clr)
+			drm_err_ratelimited(&ms912x->drm,
+					    "usb_clear_halt failed: %d\n", clr);
+	} else if (debug_transfers && ret == 0 && !request->keepalive) {
+		drm_info(&ms912x->drm, "sent rect " DRM_RECT_FMT
+			 " len %zu len%%512=%zu\n",
+			 DRM_RECT_ARG(&request->rect), request->transfer_len,
+			 request->transfer_len % 512);
+	}
 	complete(&request->done);
 }
 
@@ -192,15 +219,25 @@ static void ms912x_xrgb_to_yuv422_line(u8 *transfer_buffer,
 static const u8 ms912x_end_of_buffer[] = { 0xff, 0xc0, 0x00, 0x00,
 				    0x00, 0x00, 0x00, 0x00 };
 
+static void ms912x_put_header(void *dst, int x, int y, int width, int height)
+{
+	struct ms912x_frame_update_header *header = dst;
+	u32 position, dimensions;
+
+	header->marker = cpu_to_be16(0xff00);
+	position = ((x & 0xfff) << 12) | (y & 0xfff);
+	dimensions = ((width & 0xfff) << 12) | (height & 0xfff);
+	put_unaligned_be24(position, header->position);
+	put_unaligned_be24(dimensions, header->dimensions);
+}
+
 static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 					const struct iosys_map *src,
 					struct drm_framebuffer *fb,
 					const struct drm_rect *rect,
 					struct drm_format_conv_state *fmtcnv_state)
 {
-	struct ms912x_frame_update_header *header = dst;
 	struct iosys_map fb_map;
-	u32 position, dimensions;
 	int i, x, y1, y2, width;
 	__le32 *temp_buffer;
 
@@ -215,13 +252,8 @@ static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 	if (!temp_buffer)
 		return -ENOMEM;
 
-	header->marker = cpu_to_be16(0xff00);
-	position = ((x & 0xfff) << 12) | (y1 & 0xfff);
-	dimensions = ((width & 0xfff) << 12) |
-		     (drm_rect_height(rect) & 0xfff);
-	put_unaligned_be24(position, header->position);
-	put_unaligned_be24(dimensions, header->dimensions);
-	dst += sizeof(*header);
+	ms912x_put_header(dst, x, y1, width, drm_rect_height(rect));
+	dst += sizeof(struct ms912x_frame_update_header);
 
 	fb_map = IOSYS_MAP_INIT_OFFSET(src, y1 * fb->pitches[0]);
 	for (i = y1; i < y2; i++) {
@@ -233,6 +265,103 @@ static int ms912x_fb_xrgb8888_to_yuv422(void *dst,
 
 	memcpy(dst, ms912x_end_of_buffer, sizeof(ms912x_end_of_buffer));
 	return 0;
+}
+
+/* Copy freshly converted UYVY rows of @req into the full-frame keepalive copy. */
+static void ms912x_keepalive_update(struct ms912x_device *ms912x,
+				    struct drm_framebuffer *fb,
+				    struct ms912x_usb_request *req,
+				    const struct drm_rect *rect)
+{
+	const size_t hdr = sizeof(struct ms912x_frame_update_header);
+	u8 *dst = ms912x->ka_request.transfer_buffer;
+	const u8 *src = req->transfer_buffer;
+	int width = drm_rect_width(rect);
+	int y2 = min_t(int, rect->y2, fb->height);
+	int y;
+
+	if (!dst || fb->width != ms912x->ka_width ||
+	    fb->height != ms912x->ka_height)
+		return;
+
+	/*
+	 * Races with a keepalive transfer reading the buffer at the same time
+	 * only cause a briefly torn frame; the next update fixes it.
+	 */
+	for (y = rect->y1; y < y2; y++)
+		memcpy(dst + hdr + ((size_t)y * ms912x->ka_width + rect->x1) * 2,
+		       src + hdr + (size_t)(y - rect->y1) * width * 2,
+		       width * 2);
+}
+
+void ms912x_keepalive_work(struct work_struct *work)
+{
+	struct ms912x_device *ms912x =
+		container_of(to_delayed_work(work), struct ms912x_device,
+			     ka_work);
+	struct ms912x_usb_request *ka = &ms912x->ka_request;
+	unsigned int interval = READ_ONCE(keepalive_ms);
+	unsigned long next = msecs_to_jiffies(interval ? max(interval / 2, 20U) :
+							 1000);
+
+	if (!READ_ONCE(ms912x->ka_active))
+		return;
+
+	if (interval &&
+	    time_after_eq(jiffies, READ_ONCE(ms912x->last_send) +
+					   msecs_to_jiffies(interval)) &&
+	    try_wait_for_completion(&ka->done)) {
+		queue_work(ms912x->workqueue, &ka->work);
+		WRITE_ONCE(ms912x->last_send, jiffies);
+	}
+
+	schedule_delayed_work(&ms912x->ka_work, next);
+}
+
+void ms912x_keepalive_start(struct ms912x_device *ms912x, int width,
+			    int height)
+{
+	const size_t hdr = sizeof(struct ms912x_frame_update_header);
+	struct ms912x_usb_request *ka = &ms912x->ka_request;
+	size_t pixels = (size_t)width * height * 2;
+	u8 *buf = ka->transfer_buffer;
+	size_t i;
+
+	if (!buf)
+		return;
+
+	if (READ_ONCE(ms912x->ka_active))
+		ms912x_keepalive_stop(ms912x);
+
+	ms912x->ka_width = width;
+	ms912x->ka_height = height;
+	ms912x_put_header(buf, 0, 0, width, height);
+	/* Black in UYVY until the first real frame arrives */
+	for (i = 0; i < pixels; i += 2) {
+		buf[hdr + i] = 0x80;
+		buf[hdr + i + 1] = 0x10;
+	}
+	memcpy(buf + hdr + pixels, ms912x_end_of_buffer,
+	       sizeof(ms912x_end_of_buffer));
+	ka->transfer_len = pixels + MS912X_FRAME_OVERHEAD;
+	ka->rect = DRM_RECT_INIT(0, 0, width, height);
+	ka->keepalive = true;
+
+	WRITE_ONCE(ms912x->last_send, jiffies);
+	WRITE_ONCE(ms912x->ka_active, true);
+	schedule_delayed_work(&ms912x->ka_work, msecs_to_jiffies(100));
+}
+
+void ms912x_keepalive_stop(struct ms912x_device *ms912x)
+{
+	struct ms912x_usb_request *ka = &ms912x->ka_request;
+
+	WRITE_ONCE(ms912x->ka_active, false);
+	cancel_delayed_work_sync(&ms912x->ka_work);
+	if (ka->transfer_buffer && cancel_work_sync(&ka->work))
+		complete(&ka->done);
+	ms912x->ka_width = 0;
+	ms912x->ka_height = 0;
 }
 
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
@@ -275,7 +404,11 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 
 	current_request->transfer_len =
 		width * 2 * drm_rect_height(rect) + MS912X_FRAME_OVERHEAD;
+	current_request->rect = *rect;
+	current_request->keepalive = false;
+	ms912x_keepalive_update(ms912x, fb, current_request, rect);
 	queue_work(ms912x->workqueue, &current_request->work);
+	WRITE_ONCE(ms912x->last_send, jiffies);
 	ms912x->current_request = 1 - ms912x->current_request;
 	goto dev_exit;
 

@@ -78,6 +78,8 @@ struct ms912x_usb_request {
 	void *transfer_buffer;
 	struct ms912x_device *ms912x;
 	size_t transfer_len;
+	struct drm_rect rect; /* for diagnostics */
+	bool keepalive; /* full-frame resend, not a damage update */
 	struct sg_table transfer_sgt;
 	struct usb_sg_request sgr;
 	struct work_struct work;
@@ -130,6 +132,17 @@ struct ms912x_device {
 	 */
 	int current_request;
 	struct ms912x_usb_request requests[2];
+
+	/*
+	 * Keepalive: some panels (e.g. MPC7088 7") blank when no frame arrives
+	 * for a while and do not recover until the next mode set. Keep a
+	 * full-frame UYVY copy and resend it when the display is idle.
+	 */
+	struct ms912x_usb_request ka_request;
+	struct delayed_work ka_work;
+	unsigned long last_send; /* jiffies of the last queued transfer */
+	int ka_width, ka_height;
+	bool ka_active;
 };
 
 struct ms912x_request {
@@ -199,6 +212,10 @@ int ms912x_connector_init(struct ms912x_device *ms912x);
 int ms912x_set_resolution(struct ms912x_device *ms912x,
 			  const struct ms912x_mode *mode);
 
+void ms912x_keepalive_start(struct ms912x_device *ms912x, int width,
+			    int height);
+void ms912x_keepalive_stop(struct ms912x_device *ms912x);
+void ms912x_keepalive_work(struct work_struct *work);
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
 

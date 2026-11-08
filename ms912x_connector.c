@@ -41,7 +41,13 @@ static int ms912x_get_connector_type(struct ms912x_device *ms912x)
 	case MS912X_VIDEO_PORT_HDMI:
 		return DRM_MODE_CONNECTOR_HDMIA;
 	case MS912X_VIDEO_PORT_DIGITAL:
-		return DRM_MODE_CONNECTOR_DPI;
+		/*
+		 * A panel wired directly to the bridge (e.g. MPC7088 7" USB
+		 * display). Report it as USB rather than DPI: compositors treat
+		 * DPI/eDP/LVDS as a built-in laptop panel (named "Built-in
+		 * display" and preferred as the primary monitor).
+		 */
+		return DRM_MODE_CONNECTOR_USB;
 	case MS912X_VIDEO_PORT_CVBS_SVIDEO:
 		return DRM_MODE_CONNECTOR_9PinDIN;
 	default:
