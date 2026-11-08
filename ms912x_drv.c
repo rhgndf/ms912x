@@ -97,6 +97,12 @@ static const struct ms912x_mode ms912x_mode_list[] = {
 	MS912X_MODE(1600, 1200, 60, 0x73), /* 60.00 Hz */
 	MS912X_MODE(1680, 1050, 60, 0x78), /* 59.95 Hz */
 	MS912X_MODE(1920, 1080, 60, 0x81), /* 60.00 Hz */
+	/*
+	 * Vendor-defined VICs from WinUSBDisplay config.ini (MPC7088 7" panel).
+	 * 1024x600@60: 51.21 MHz, total 1344x635, matches the panel EDID DTD.
+	 */
+	MS912X_MODE(1024,  600, 60, 0x96), /* 60.00 Hz, VIC 150 */
+	MS912X_MODE(800,  480, 60, 0x99), /* 60.00 Hz, VIC 153 */
 };
 
 static const struct ms912x_mode *
