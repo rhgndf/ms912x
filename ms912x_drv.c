@@ -157,8 +157,12 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	}
 
 	ret = ms912x_set_resolution(ms912x, ms_mode);
-	if (ret)
+	if (ret) {
 		drm_err(dev, "failed to set display mode: %d\n", ret);
+		return;
+	}
+
+	ms912x_keepalive_start(ms912x, ms_mode->width, ms_mode->height);
 }
 
 static void ms912x_cancel_transfer_work(struct ms912x_device *ms912x)
@@ -180,6 +184,7 @@ static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
 	struct ms912x_device *ms912x = to_ms912x(dev);
 	int ret;
 
+	ms912x_keepalive_stop(ms912x);
 	ms912x_cancel_transfer_work(ms912x);
 	ret = ms912x_power_off(ms912x);
 	if (ret && ret != -ENODEV)
@@ -403,6 +408,12 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (ret)
 		goto err_free_request_0;
 
+	INIT_DELAYED_WORK(&ms912x->ka_work, ms912x_keepalive_work);
+	ret = ms912x_init_request(ms912x, &ms912x->ka_request,
+				  MS912X_MAX_TRANSFER_LEN);
+	if (ret)
+		goto err_free_request_1;
+
 	ret = drm_universal_plane_init(dev, &ms912x->plane, 0,
 				       &ms912x_plane_funcs,
 				       ms912x_plane_formats,
@@ -441,6 +452,7 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	return 0;
 
 err_free_request_1:
+	ms912x_free_request(&ms912x->ka_request);
 	ms912x_free_request(&ms912x->requests[1]);
 err_free_request_0:
 	ms912x_free_request(&ms912x->requests[0]);
@@ -454,7 +466,9 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
+	ms912x_keepalive_stop(ms912x);
 	ms912x_cancel_transfer_work(ms912x);
+	ms912x_free_request(&ms912x->ka_request);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
 }
