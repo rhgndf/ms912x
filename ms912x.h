@@ -78,6 +78,7 @@ struct ms912x_usb_request {
 	void *transfer_buffer;
 	struct ms912x_device *ms912x;
 	size_t transfer_len;
+	struct drm_rect rect; /* for diagnostics */
 	struct sg_table transfer_sgt;
 	struct usb_sg_request sgr;
 	struct work_struct work;

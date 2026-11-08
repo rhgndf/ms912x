@@ -26,6 +26,10 @@
 
 #include "ms912x.h"
 
+static bool debug_transfers;
+module_param(debug_transfers, bool, 0644);
+MODULE_PARM_DESC(debug_transfers, "Log every framebuffer transfer (rect, length)");
+
 static void ms912x_request_timeout(struct timer_list *t)
 {
 	struct ms912x_usb_request *request = timer_container_of(request, t, timer);
@@ -67,9 +71,27 @@ static void ms912x_request_work(struct work_struct *work)
 dev_exit:
 	drm_dev_exit(idx);
 complete:
-	if (ret < 0 && ret != -ENODEV)
+	if (ret < 0 && ret != -ENODEV) {
+		int clr;
+
 		drm_err_ratelimited(&ms912x->drm,
-				    "failed to send framebuffer: %d\n", ret);
+				    "failed to send framebuffer: %d (rect " DRM_RECT_FMT
+				    ", len %zu, len%%512=%zu, sent %zu)\n",
+				    ret, DRM_RECT_ARG(&request->rect),
+				    request->transfer_len,
+				    request->transfer_len % 512, sgr->bytes);
+		/* Try to get the bulk endpoint out of a stalled/desynced state. */
+		clr = usb_clear_halt(interface_to_usbdev(ms912x->intf),
+				     ms912x->bulk_pipe);
+		if (clr)
+			drm_err_ratelimited(&ms912x->drm,
+					    "usb_clear_halt failed: %d\n", clr);
+	} else if (debug_transfers && ret == 0) {
+		drm_info(&ms912x->drm, "sent rect " DRM_RECT_FMT
+			 " len %zu len%%512=%zu\n",
+			 DRM_RECT_ARG(&request->rect), request->transfer_len,
+			 request->transfer_len % 512);
+	}
 	complete(&request->done);
 }
 
@@ -275,6 +297,7 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 
 	current_request->transfer_len =
 		width * 2 * drm_rect_height(rect) + MS912X_FRAME_OVERHEAD;
+	current_request->rect = *rect;
 	queue_work(ms912x->workqueue, &current_request->work);
 	ms912x->current_request = 1 - ms912x->current_request;
 	goto dev_exit;
