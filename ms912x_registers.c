@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <asm/byteorder.h>
+#include <linux/delay.h>
 #include <linux/hid.h>
 #include <linux/mutex.h>
 #include <linux/string.h>
@@ -378,4 +379,203 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 		return ret;
 
 	return 0;
+}
+
+static int ms912x_write_byte(struct ms912x_device *ms912x, u16 address,
+			     u8 value)
+{
+	struct ms912x_request request;
+	struct usb_device *usb_dev;
+	int idx, ret;
+
+	if (!drm_dev_enter(&ms912x->drm, &idx))
+		return -ENODEV;
+
+	mutex_lock(&ms912x->ctrl_lock);
+	usb_dev = interface_to_usbdev(ms912x->intf);
+	memset(&request, 0, sizeof(request));
+	request.type = MS912X_REQ_TYPE_WRITE_BYTE;
+	request.addr = cpu_to_be16(address);
+	request.data[0] = value;
+
+	ret = usb_control_msg_send(usb_dev, 0, HID_REQ_SET_REPORT,
+				   USB_DIR_OUT | USB_TYPE_CLASS |
+					   USB_RECIP_INTERFACE,
+				   0x0300, 0, &request, sizeof(request),
+				   USB_CTRL_SET_TIMEOUT, GFP_KERNEL);
+	mutex_unlock(&ms912x->ctrl_lock);
+	drm_dev_exit(idx);
+
+	return ret;
+}
+
+int ms912x_detect_chip(struct ms912x_device *ms912x)
+{
+	int msb, lsb;
+
+	msb = ms912x_read_byte(ms912x, MS913X_REG_CHIP_ID + 1);
+	if (msb < 0)
+		return msb;
+	lsb = ms912x_read_byte(ms912x, MS913X_REG_CHIP_ID + 2);
+	if (lsb < 0)
+		return lsb;
+
+	ms912x->is_913x = msb == MS913X_CHIP_ID_SIGNATURE_MSB &&
+			  lsb == MS91XX_CHIP_ID_SIGNATURE_LSB;
+	return 0;
+}
+
+static int ms912x_cmd(struct ms912x_device *ms912x, u8 cmd, u8 b0, u8 b1)
+{
+	u8 data[6] = { b0, b1 };
+
+	return ms912x_write_6_bytes(ms912x, cmd, data);
+}
+
+/*
+ * Mute or unmute the output stage. Register and polarity per chip family
+ * and port type, as done by the MacroSilicon vendor driver.
+ */
+static int ms912x_set_screen_enable(struct ms912x_device *ms912x, bool enable)
+{
+	bool is_clear = false;
+	u16 addr;
+	u8 mask;
+	int ret;
+
+	if (ms912x->is_913x) {
+		if (ms912x->port_type == MS912X_VIDEO_PORT_HDMI) {
+			addr = 0xfb07;
+			mask = 0x02;
+			is_clear = true;
+		} else {
+			addr = 0xf037;
+			mask = 0x01;
+		}
+	} else {
+		switch (ms912x->port_type) {
+		case MS912X_VIDEO_PORT_HDMI:
+			addr = 0xf507;
+			mask = 0x02;
+			is_clear = true;
+			break;
+		case MS912X_VIDEO_PORT_VGA:
+			addr = 0xf004;
+			mask = 0x80;
+			break;
+		case MS912X_VIDEO_PORT_YPBPR:
+			addr = 0xf030;
+			mask = 0x01;
+			break;
+		case MS912X_VIDEO_PORT_DIGITAL:
+			addr = 0xf005;
+			mask = 0x10;
+			break;
+		default:
+			addr = 0xf004;
+			mask = 0x02;
+			break;
+		}
+	}
+
+	ret = ms912x_read_byte(ms912x, addr);
+	if (ret < 0)
+		return ret;
+
+	if (enable ^ is_clear)
+		ret |= mask;
+	else
+		ret &= ~mask;
+
+	return ms912x_write_byte(ms912x, addr, ret);
+}
+
+/*
+ * Mode set sequence of the MacroSilicon vendor driver. The video output is
+ * left off; ms912x_hw_start_video() turns it on once the first frame has
+ * been transferred. Without the delays and this ordering the MS9133 accepts
+ * frames but never drives its HDMI output.
+ */
+int ms912x_hw_enable(struct ms912x_device *ms912x,
+		     const struct ms912x_mode *mode)
+{
+	struct ms912x_resolution_request resolution_request;
+	struct ms912x_mode_request mode_request;
+	int ret;
+
+	ret = ms912x_cmd(ms912x, MS912X_CMD_UNKNOWN2, 0, 0);
+	if (ret)
+		return ret;
+	ret = ms912x_cmd(ms912x, MS912X_CMD_OUTPUT_ENABLE, 0, 0);
+	if (ret)
+		return ret;
+	ret = ms912x_set_screen_enable(ms912x, false);
+	if (ret)
+		return ret;
+	msleep(50);
+
+	ret = ms912x_power_on(ms912x);
+	if (ret)
+		return ret;
+	msleep(50);
+
+	/* Manual block transfer mode */
+	ret = ms912x_cmd(ms912x, MS912X_CMD_UNKNOWN1, 3, 0);
+	if (ret)
+		return ret;
+
+	resolution_request.width = cpu_to_be16(mode->width);
+	resolution_request.height = cpu_to_be16(mode->height);
+	resolution_request.pixel_format = MS912X_PIXFMT_UYVY;
+	resolution_request.byte_select = MS912X_BYTE_SELECT_UYVY;
+	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_RESOLUTION,
+				   &resolution_request);
+	if (ret)
+		return ret;
+
+	mode_request.mode = mode->mode;
+	mode_request.pixel_format = 0x01;
+	mode_request.width = cpu_to_be16(mode->width);
+	mode_request.height = cpu_to_be16(mode->height);
+	ret = ms912x_write_6_bytes(ms912x, MS912X_CMD_MODE, &mode_request);
+	if (ret)
+		return ret;
+
+	ret = ms912x_cmd(ms912x, MS912X_CMD_UNKNOWN2, 1, 0);
+	if (ret)
+		return ret;
+	msleep(50);
+
+	ret = ms912x_cmd(ms912x, MS912X_CMD_OUTPUT_ENABLE, 0, 0);
+	if (ret)
+		return ret;
+	return ms912x_set_screen_enable(ms912x, false);
+}
+
+int ms912x_hw_start_video(struct ms912x_device *ms912x)
+{
+	int ret;
+
+	ret = ms912x_cmd(ms912x, MS912X_CMD_OUTPUT_ENABLE, 1, 0);
+	if (ret)
+		return ret;
+	return ms912x_set_screen_enable(ms912x, true);
+}
+
+int ms912x_hw_disable(struct ms912x_device *ms912x)
+{
+	int ret, err;
+
+	err = ms912x_cmd(ms912x, MS912X_CMD_UNKNOWN2, 0, 0);
+	ret = ms912x_cmd(ms912x, MS912X_CMD_OUTPUT_ENABLE, 0, 0);
+	if (ret && !err)
+		err = ret;
+	ret = ms912x_set_screen_enable(ms912x, false);
+	if (ret && !err)
+		err = ret;
+	ret = ms912x_power_off(ms912x);
+	if (ret && !err)
+		err = ret;
+
+	return err;
 }

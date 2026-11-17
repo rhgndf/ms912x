@@ -32,6 +32,7 @@
 
 #define MS912X_REQ_TYPE_WRITE_6_BYTES	0xa6
 #define MS912X_REQ_TYPE_READ_BYTE	0xb5
+#define MS912X_REQ_TYPE_WRITE_BYTE	0xb6
 #define MS912X_REQ_TYPE_READ_FLASH	0xf5
 
 #define MS912X_REG_VIDEO_PORT		0x0031
@@ -42,12 +43,16 @@
 #define MS912X_REG_MODE_SEQUENCE_1	0x0033
 #define MS912X_REG_MODE_SEQUENCE_2	0xc620
 
-#define MS912X_CMD_RESOLUTION		0x01
-#define MS912X_CMD_MODE			0x02
-#define MS912X_CMD_UNKNOWN1		0x03
-#define MS912X_CMD_UNKNOWN2		0x04
-#define MS912X_CMD_OUTPUT_ENABLE	0x05
+/* Names in comments are from the MacroSilicon vendor driver */
+#define MS912X_CMD_RESOLUTION		0x01 /* video in info */
+#define MS912X_CMD_MODE			0x02 /* video out info */
+#define MS912X_CMD_UNKNOWN1		0x03 /* transfer mode */
+#define MS912X_CMD_UNKNOWN2		0x04 /* transfer enable */
+#define MS912X_CMD_OUTPUT_ENABLE	0x05 /* video enable */
 #define MS912X_CMD_POWER		0x07
+
+/* Resend the image after this long without updates, see keepalive_work */
+#define MS912X_KEEPALIVE_MS		1000
 
 #define MS913X_REG_CHIP_ID			0xff00
 #define MS912X_REG_CHIP_ID			0xf000
@@ -111,6 +116,8 @@ struct ms912x_device {
 	struct usb_interface *intf;
 	unsigned int bulk_pipe;
 	enum ms912x_video_port port_type;
+	bool is_913x;		/* MS9132/MS9133/MS9135 register layout */
+	bool video_pending;	/* video is turned on after the first frame */
 	struct workqueue_struct *workqueue;
 	/* Serializes HID control request/response sequences */
 	struct mutex ctrl_lock;
@@ -130,6 +137,14 @@ struct ms912x_device {
 	 */
 	int current_request;
 	struct ms912x_usb_request requests[2];
+
+	/*
+	 * The device turns its video output off when it receives no frames
+	 * for a few seconds, so the last transfer is resent while the
+	 * screen is idle.
+	 */
+	struct ms912x_usb_request *last_request;
+	struct delayed_work keepalive_work;
 };
 
 struct ms912x_request {
@@ -201,6 +216,12 @@ int ms912x_set_resolution(struct ms912x_device *ms912x,
 
 int ms912x_power_on(struct ms912x_device *ms912x);
 int ms912x_power_off(struct ms912x_device *ms912x);
+int ms912x_detect_chip(struct ms912x_device *ms912x);
+int ms912x_hw_enable(struct ms912x_device *ms912x,
+		     const struct ms912x_mode *mode);
+int ms912x_hw_start_video(struct ms912x_device *ms912x);
+int ms912x_hw_disable(struct ms912x_device *ms912x);
+void ms912x_keepalive_work(struct work_struct *work);
 
 int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 			struct drm_format_conv_state *fmtcnv_state,
