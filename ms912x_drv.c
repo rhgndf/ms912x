@@ -209,9 +209,18 @@ static int ms912x_plane_atomic_check(struct drm_plane *plane,
 	/*
 	 * A mode set does change how the device interprets the framebuffer
 	 * so ask for a full plane update for the first frame after one.
+	 *
+	 * A plain framebuffer switch does not: the device keeps its own copy
+	 * of the image, and damage clips describe the change relative to the
+	 * previously displayed frame even when compositors flip between
+	 * swapchain buffers (which they do on every frame). Only fall back
+	 * to a full update when the new framebuffer has a different layout.
 	 */
 	new_plane_state->ignore_damage_clips =
-		old_plane_state->fb != new_plane_state->fb ||
+		!old_plane_state->fb || !new_plane_state->fb ||
+		old_plane_state->fb->format != new_plane_state->fb->format ||
+		old_plane_state->fb->width != new_plane_state->fb->width ||
+		old_plane_state->fb->height != new_plane_state->fb->height ||
 		(crtc_state && drm_atomic_crtc_needs_modeset(crtc_state));
 
 	return drm_atomic_helper_check_plane_state(new_plane_state, crtc_state,
