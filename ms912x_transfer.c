@@ -33,14 +33,38 @@ static void ms912x_request_timeout(struct timer_list *t)
 	usb_sg_cancel(&request->sgr);
 }
 
+static int ms912x_request_send(struct ms912x_usb_request *request)
+{
+	struct ms912x_device *ms912x = request->ms912x;
+	struct usb_device *usbdev = interface_to_usbdev(ms912x->intf);
+	struct usb_sg_request *sgr = &request->sgr;
+	struct sg_table *transfer_sgt = &request->transfer_sgt;
+	int ret;
+
+	ret = usb_sg_init(sgr, usbdev, ms912x->bulk_pipe, 0, transfer_sgt->sgl,
+			  transfer_sgt->nents, request->transfer_len,
+			  GFP_KERNEL);
+	if (ret)
+		return ret;
+
+	mod_timer(&request->timer, jiffies + msecs_to_jiffies(5000));
+	usb_sg_wait(sgr);
+
+	if (!timer_delete_sync(&request->timer))
+		return -ETIMEDOUT;
+	if (sgr->status < 0)
+		return sgr->status;
+	if (sgr->bytes != request->transfer_len)
+		return -EIO;
+
+	return 0;
+}
+
 static void ms912x_request_work(struct work_struct *work)
 {
 	struct ms912x_usb_request *request =
 		container_of(work, struct ms912x_usb_request, work);
 	struct ms912x_device *ms912x = request->ms912x;
-	struct usb_device *usbdev = interface_to_usbdev(ms912x->intf);
-	struct usb_sg_request *sgr = &request->sgr;
-	struct sg_table *transfer_sgt = &request->transfer_sgt;
 	int idx, ret;
 
 	if (!drm_dev_enter(&ms912x->drm, &idx)) {
@@ -48,29 +72,67 @@ static void ms912x_request_work(struct work_struct *work)
 		goto complete;
 	}
 
-	ret = usb_sg_init(sgr, usbdev, ms912x->bulk_pipe, 0, transfer_sgt->sgl,
-			  transfer_sgt->nents, request->transfer_len,
-			  GFP_KERNEL);
-	if (ret)
-		goto dev_exit;
+	ret = ms912x_request_send(request);
 
-	mod_timer(&request->timer, jiffies + msecs_to_jiffies(5000));
-	usb_sg_wait(sgr);
+	if (!ret && ms912x->video_pending) {
+		/*
+		 * First (full) frame after a mode set: turn the video output
+		 * on now. The device only shows frames received after that,
+		 * and a static screen sends nothing more, so send this frame
+		 * again, to both of the device's buffers.
+		 */
+		ret = ms912x_hw_start_video(ms912x);
+		if (!ret)
+			ret = ms912x_request_send(request);
+		if (!ret)
+			ret = ms912x_request_send(request);
+		if (!ret)
+			ms912x->video_pending = false;
+	}
 
-	if (!timer_delete_sync(&request->timer))
-		ret = -ETIMEDOUT;
-	else if (sgr->status < 0)
-		ret = sgr->status;
-	else if (sgr->bytes != request->transfer_len)
-		ret = -EIO;
-
-dev_exit:
 	drm_dev_exit(idx);
 complete:
 	if (ret < 0 && ret != -ENODEV)
 		drm_err_ratelimited(&ms912x->drm,
 				    "failed to send framebuffer: %d\n", ret);
 	complete(&request->done);
+}
+
+/*
+ * Resend the last transfer while the screen is idle: the device turns its
+ * video output off after a few seconds without frames. That transfer
+ * carries the damage of the last two frames, so it brings either of the
+ * device's buffers up to date. It runs on the ordered transfer workqueue,
+ * after any frame already queued.
+ */
+void ms912x_keepalive_work(struct work_struct *work)
+{
+	struct ms912x_device *ms912x =
+		container_of(to_delayed_work(work), struct ms912x_device,
+			     keepalive_work);
+	struct ms912x_usb_request *request = READ_ONCE(ms912x->last_request);
+	int idx, ret;
+
+	if (!request || ms912x->video_pending)
+		return;
+
+	/*
+	 * Claim the buffer like a new frame does. If a new frame holds it,
+	 * that frame keeps the output alive and re-arms the keepalive.
+	 */
+	if (!try_wait_for_completion(&request->done))
+		return;
+
+	if (drm_dev_enter(&ms912x->drm, &idx)) {
+		ret = ms912x_request_send(request);
+		drm_dev_exit(idx);
+		if (ret)
+			drm_dbg(&ms912x->drm, "keepalive failed: %d\n", ret);
+	}
+	complete(&request->done);
+
+	mod_delayed_work(ms912x->workqueue, &ms912x->keepalive_work,
+			 msecs_to_jiffies(MS912X_KEEPALIVE_MS));
 }
 
 void ms912x_free_request(struct ms912x_usb_request *request)
@@ -276,7 +338,10 @@ int ms912x_fb_send_rect(struct drm_framebuffer *fb, const struct iosys_map *map,
 	current_request->transfer_len =
 		width * 2 * drm_rect_height(rect) + MS912X_FRAME_OVERHEAD;
 	queue_work(ms912x->workqueue, &current_request->work);
+	WRITE_ONCE(ms912x->last_request, current_request);
 	ms912x->current_request = 1 - ms912x->current_request;
+	mod_delayed_work(ms912x->workqueue, &ms912x->keepalive_work,
+			 msecs_to_jiffies(MS912X_KEEPALIVE_MS));
 	goto dev_exit;
 
 request_complete:

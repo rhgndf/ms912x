@@ -138,19 +138,15 @@ static void ms912x_crtc_atomic_enable(struct drm_crtc *crtc,
 	const struct ms912x_mode *ms_mode;
 	int ret;
 
-	ret = ms912x_power_on(ms912x);
-	if (ret) {
-		drm_err(dev, "failed to power on display: %d\n", ret);
-		return;
-	}
-
 	ms_mode = ms912x_get_mode(ms912x, &crtc_state->mode);
 	if (!ms_mode) {
 		drm_err(dev, "unsupported mode passed to CRTC enable\n");
 		return;
 	}
 
-	ret = ms912x_set_resolution(ms912x, ms_mode);
+	ms912x->video_pending = true;
+	WRITE_ONCE(ms912x->last_request, NULL);
+	ret = ms912x_hw_enable(ms912x, ms_mode);
 	if (ret)
 		drm_err(dev, "failed to set display mode: %d\n", ret);
 }
@@ -174,8 +170,10 @@ static void ms912x_crtc_atomic_disable(struct drm_crtc *crtc,
 	struct ms912x_device *ms912x = to_ms912x(dev);
 	int ret;
 
+	cancel_delayed_work_sync(&ms912x->keepalive_work);
 	ms912x_cancel_transfer_work(ms912x);
-	ret = ms912x_power_off(ms912x);
+	WRITE_ONCE(ms912x->last_request, NULL);
+	ret = ms912x_hw_disable(ms912x);
 	if (ret && ret != -ENODEV)
 		drm_err(dev, "failed to power off display: %d\n", ret);
 }
@@ -340,6 +338,10 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 	if (!usb_check_bulk_endpoints(interface, ms912x_bulk_out_endpoints))
 		return -ENXIO;
 
+	ret = ms912x_detect_chip(ms912x);
+	if (ret)
+		drm_warn(&ms912x->drm, "failed to read chip id: %d\n", ret);
+
 	ret = ms912x_read_custom_timing(ms912x);
 	if (ret < 0) {
 		drm_warn(&ms912x->drm,
@@ -386,6 +388,8 @@ static int ms912x_usb_probe(struct usb_interface *interface,
 		drmm_alloc_ordered_workqueue(dev, DRIVER_NAME, 0);
 	if (IS_ERR(ms912x->workqueue))
 		return PTR_ERR(ms912x->workqueue);
+
+	INIT_DELAYED_WORK(&ms912x->keepalive_work, ms912x_keepalive_work);
 
 	ret = ms912x_init_request(ms912x, &ms912x->requests[0],
 				  MS912X_MAX_TRANSFER_LEN);
@@ -448,6 +452,7 @@ static void ms912x_usb_disconnect(struct usb_interface *interface)
 
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
+	cancel_delayed_work_sync(&ms912x->keepalive_work);
 	ms912x_cancel_transfer_work(ms912x);
 	ms912x_free_request(&ms912x->requests[0]);
 	ms912x_free_request(&ms912x->requests[1]);
